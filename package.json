@@ -28,6 +28,7 @@
 		"http-proxy-agent": "^7.0.2",
 		"https-proxy-agent": "^7.0.6",
 		"obsidian": "latest",
+		"playwright": "^1.57.0",
 		"proxy-agent": "^6.5.0",
 		"turndown": "^7.1.3"
 	}

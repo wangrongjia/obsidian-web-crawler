@@ -333,9 +333,17 @@ export class WebCrawler {
 				console.log(`⚠️ 未配置 Cookie`);
 			}
 
+			// 检查是否需要使用 Playwright（Twitter/X 等动态网页）
+			const needsPlaywright = this.needsPlaywright(url);
+			let html: string;
 
+			if (needsPlaywright) {
+				console.log('✓ 检测到动态网页，使用 Playwright（通过本地服务器）');
+				html = await this.fetchWithPlaywright(url, headers, settings);
+			} else {
 				// 优先使用Electron的net模块（支持系统代理），否则使用Node.js http/https
-			let	html = await this.fetchWithElectronNet(url, headers, settings);
+				html = await this.fetchWithElectronNet(url, headers, settings);
+			}
 
 			// 调试：保存原始HTML到插件目录
 			try {
@@ -355,7 +363,20 @@ export class WebCrawler {
 			}
 
 			// 解析HTML获取标题和内容
-			const { title, content } = this.extractContent(html, url);
+			let title: string;
+			let content: string;
+
+			// Twitter/X 使用特殊的内容提取
+			if (url.includes('x.com') || url.includes('twitter.com')) {
+				const extracted = this.extractTwitterContent(html);
+				title = extracted.title;
+				content = extracted.content;
+			} else {
+				// 其他网站使用通用提取
+				const extracted = this.extractContent(html, url);
+				title = extracted.title;
+				content = extracted.content;
+			}
 
 			// 检查是否为 V2EX 并提取回复
 			let finalHtmlContent = content;
@@ -379,7 +400,15 @@ export class WebCrawler {
 			}
 
 			// 将HTML转换为Markdown
-			const markdown = this.turndownService.turndown(finalHtmlContent || html);
+			// 注意：Twitter/X 的 content 已经是 Markdown 格式，不需要再转换
+			let markdown: string;
+			if (url.includes('x.com') || url.includes('twitter.com')) {
+				// Twitter 的内容已经手动格式化好了，直接使用
+				markdown = content;
+			} else {
+				// 其他网站需要转换 HTML 为 Markdown
+				markdown = this.turndownService.turndown(finalHtmlContent || html);
+			}
 
 			return {
 				title: title || '未命名',
@@ -654,6 +683,195 @@ export class WebCrawler {
 		}
 
 		return fileName;
+	}
+
+	/**
+	 * 检测URL是否需要使用Playwright（动态网页）
+	 */
+	private needsPlaywright(url: string): boolean {
+		const playwrightPatterns = [
+			/x\.com/,
+			/twitter\.com/,
+		];
+
+		return playwrightPatterns.some(pattern => pattern.test(url));
+	}
+
+	/**
+	 * 通过本地服务器使用 Playwright
+	 */
+	private async fetchWithLocalServer(url: string, settings: WebCrawlerPluginSettings): Promise<string> {
+		const http = require('http');
+
+		return new Promise((resolve, reject) => {
+			const postData = JSON.stringify({
+				url: url,
+				proxy: settings.proxyUrl || undefined
+			});
+
+			const options = {
+				hostname: 'localhost',
+				port: 3737,
+				path: '/crawl',
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Content-Length': Buffer.byteLength(postData)
+				},
+				timeout: 90000 // 90秒超时
+			};
+
+			const req = http.request(options, (res: any) => {
+				let data = '';
+
+				res.on('data', (chunk: any) => {
+					data += chunk;
+				});
+
+				res.on('end', () => {
+					try {
+						const result = JSON.parse(data);
+						if (result.success) {
+							console.log(`✓ 本地服务器返回内容，长度: ${result.html.length}`);
+							resolve(result.html);
+						} else {
+							reject(new Error(result.error || '爬取失败'));
+						}
+					} catch (e) {
+						reject(new Error(`解析响应失败: ${e instanceof Error ? e.message : String(e)}`));
+					}
+				});
+			});
+
+			req.on('error', (error: Error) => {
+				reject(new Error(`本地服务器连接失败: ${error.message}\n请先运行: node server.js`));
+			});
+
+			req.on('timeout', () => {
+				req.destroy();
+				reject(new Error('请求超时'));
+			});
+
+			req.write(postData);
+			req.end();
+		});
+	}
+
+	/**
+	 * 使用Playwright获取动态网页内容（通过本地服务器）
+	 */
+	private async fetchWithPlaywright(url: string, headers: Record<string, string>, settings: WebCrawlerPluginSettings): Promise<string> {
+		console.log('使用 Playwright（通过本地服务器）爬取动态内容...');
+
+		try {
+			// 尝试通过本地服务器
+			return await this.fetchWithLocalServer(url, settings);
+		} catch (error) {
+			throw new Error(
+				`Playwright 服务器不可用\n` +
+				`请先运行: node server.js\n` +
+				`错误: ${error instanceof Error ? error.message : String(error)}`
+			);
+		}
+	}
+
+	/**
+	 * 提取Twitter/X内容
+	 */
+	private extractTwitterContent(html: string): { title: string; content: string } {
+		// 提取推文文本
+		const tweetTextMatch = html.match(/<div[^>]*data-testid=["']tweetText["'][^>]*>([\s\S]*?)<\/div>/i);
+		let tweetText = '';
+		if (tweetTextMatch && tweetTextMatch[1]) {
+			// 移除HTML标签获取纯文本
+			tweetText = tweetTextMatch[1].replace(/<[^>]+>/g, '').trim();
+		}
+
+		// 尝试提取作者信息
+		const authorMatch = html.match(/<span[^>]*class=["'][^"']*username[^"']*["'][^>]*>[\s\S]*?<span[^>]*>(@[^<]+)<\/span>/i);
+		const author = authorMatch ? authorMatch[1] : '';
+
+		// 尝试提取作者显示名称
+		const displayNameMatch = html.match(/<span[^>]*class=["'][^"']*css-901oao[^"']*["'][^>]*>([^<]+)<\/span>\s*<span[^>]*class=["'][^"']*username[^"']*["']/i);
+		const displayName = displayNameMatch && displayNameMatch[1] ? displayNameMatch[1].trim() : '';
+
+		// 尝试提取时间
+		const timeMatch = html.match(/<time[^>]*datetime=["']([^"']+)["']/i);
+		const time = timeMatch ? timeMatch[1] : '';
+
+		// 构建标题（用于文件名）
+		let title = 'Twitter/X 帖子';
+		if (displayName && author) {
+			title = `${displayName} ${author}`;
+		} else if (author) {
+			title = `${author} 的推文`;
+		}
+
+		// 构建内容（包含元数据）
+		let content = '';
+		if (displayName) {
+			content += `<p><strong>作者:</strong> ${displayName}</p>\n`;
+		}
+		if (author) {
+			content += `<p><strong>用户名:</strong> ${author}</p>\n`;
+		}
+		if (time) {
+			content += `<p><strong>发布时间:</strong> ${time}</p>\n`;
+		}
+		content += `<hr>\n\n`;
+
+		if (tweetText) {
+			content += `<div>${tweetText}</div>`;
+		}
+
+		// 提取图片（Twitter 的推文图片在 media/ 路径下）
+		// 注意：HTML 中的 & 会被编码为 &amp;
+		const imageMatches = html.matchAll(/<img[^>]*src=["']([^"']*pbs\.twimg\.com\/media\/[^"']*)["'][^>]*>/gi);
+		const images: string[] = [];
+		const seenUrls = new Set<string>(); // 去重
+
+		for (const match of imageMatches) {
+			if (match[1]) {
+				// 转换 HTML 实体（&amp; -> &）
+				let imageUrl = match[1].replace(/&amp;/g, '&');
+
+				// 去重（同一张图片可能有多个尺寸）
+				// 提取基础 URL（移除尺寸参数）
+				const baseUrl = imageUrl.split('?')[0];
+
+				if (baseUrl && !seenUrls.has(baseUrl)) {
+					seenUrls.add(baseUrl);
+
+					// 尝试获取原图（使用 large 或 4096x4096）
+					const largeUrl = imageUrl.replace(/name=\w+/, 'name=4096x4096');
+					images.push(`![图片](${largeUrl})`);
+				}
+			}
+		}
+
+		if (images.length > 0) {
+			content += '\n\n## 图片\n\n' + images.join('\n\n');
+		}
+
+		// 如果有推文文本，尝试从中提取标题（用于文件名）
+		if (tweetText) {
+			// 获取第一行或前30个字符
+			const lines = tweetText.split('\n');
+			const firstLine = lines[0] ? lines[0].trim() : '';
+			const shortTitle = firstLine.length > 30 ? firstLine.substring(0, 30) : firstLine;
+
+			// 移除非法字符
+			title = shortTitle.replace(/[<>:"/\\|?*]/g, '').trim();
+
+			// 如果标题为空，使用作者名
+			if (!title) {
+				title = displayName && author ? `${displayName} ${author}` :
+					author ? `${author} 的推文` :
+					'Twitter/X 帖子';
+			}
+		}
+
+		return { title, content };
 	}
 }
 
