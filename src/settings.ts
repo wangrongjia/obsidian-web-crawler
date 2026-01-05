@@ -1,4 +1,4 @@
-import {App, PluginSettingTab, Setting} from "obsidian";
+import {App, Notice, PluginSettingTab, Setting} from "obsidian";
 import WebCrawlerPlugin from "./main";
 
 export interface LoginConfig {
@@ -39,6 +39,8 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 		containerEl.createEl('h2', {text: '网页爬取设置'});
 
 		// 代理设置
+		containerEl.createEl('h3', {text: '代理设置'});
+
 		new Setting(containerEl)
 			.setName('使用系统代理')
 			.setDesc('自动使用系统或浏览器的代理设置（适用于 Electron 环境）')
@@ -47,6 +49,56 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.useSystemProxy = value;
 					await this.plugin.saveSettings();
+				}));
+
+		// 快捷选择常见代理
+		new Setting(containerEl)
+			.setName('快捷配置代理')
+			.setDesc('选择常见的代理配置（自动填入下方代理服务器地址）')
+			.addDropdown(dropdown => dropdown
+				.addOption('custom', '自定义')
+				.addOption('clash_verge', 'Clash Verge - HTTP (127.0.0.1:7897)')
+				.addOption('clash_http', 'Clash - HTTP (127.0.0.1:7890)')
+				.addOption('clash_socks5', 'Clash - SOCKS5 (127.0.0.1:7891)')
+				.addOption('v2ray_http', 'V2RayN - HTTP (127.0.0.1:10809)')
+				.addOption('v2ray_socks5', 'V2RayN - SOCKS5 (127.0.0.1:10808)')
+				.addOption('env', '使用环境变量 (HTTP_PROXY/HTTPS_PROXY)')
+				.setValue('custom')
+				.onChange(async (value) => {
+					let proxyUrl = '';
+					switch(value) {
+						case 'clash_verge':
+							proxyUrl = 'http://127.0.0.1:7897';
+							break;
+						case 'clash_http':
+							proxyUrl = 'http://127.0.0.1:7890';
+							break;
+						case 'clash_socks5':
+							proxyUrl = 'socks5://127.0.0.1:7891';
+							break;
+						case 'v2ray_http':
+							proxyUrl = 'http://127.0.0.1:10809';
+							break;
+						case 'v2ray_socks5':
+							proxyUrl = 'socks5://127.0.0.1:10808';
+							break;
+						case 'env':
+							// 使用环境变量
+							const envProxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
+							if (envProxy) {
+								proxyUrl = envProxy;
+								new Notice(`已从环境变量读取代理: ${envProxy}`);
+							} else {
+								new Notice('⚠️ 未找到环境变量 HTTP_PROXY 或 HTTPS_PROXY');
+							}
+							break;
+					}
+					if (proxyUrl) {
+						this.plugin.settings.proxyUrl = proxyUrl;
+						await this.plugin.saveSettings();
+						// 刷新界面以显示新值
+						this.display();
+					}
 				}));
 
 		new Setting(containerEl)
@@ -58,6 +110,32 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.proxyUrl = value;
 					await this.plugin.saveSettings();
+				}));
+
+		// 代理测试按钮
+		new Setting(containerEl)
+			.setName('测试代理连接')
+			.setDesc('测试当前代理配置是否可用（访问 google.com）')
+			.addButton(button => button
+				.setButtonText('测试代理')
+				.onClick(async () => {
+					const testButton = button;
+					testButton.setDisabled(true);
+					testButton.setButtonText('测试中...');
+
+					try {
+						const success = await this.testProxy(this.plugin.settings);
+						if (success) {
+							new Notice('✅ 代理连接成功！可以访问外网。');
+						} else {
+							new Notice('❌ 代理连接失败，请检查代理配置。');
+						}
+					} catch (error) {
+						new Notice(`❌ 测试失败: ${error instanceof Error ? error.message : String(error)}`);
+					} finally {
+						testButton.setDisabled(false);
+						testButton.setButtonText('测试代理');
+					}
 				}));
 
 		containerEl.createEl('hr');
@@ -184,5 +262,66 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 					config.userAgent = value;
 					await this.plugin.saveSettings();
 				}));
+	}
+
+	/**
+	 * 测试代理连接
+	 */
+	async testProxy(settings: WebCrawlerPluginSettings): Promise<boolean> {
+		const https = require('https');
+		const { ProxyAgent } = require('proxy-agent');
+
+		return new Promise((resolve) => {
+			try {
+				const options: any = {
+					method: 'GET',
+					hostname: 'www.google.com',
+					path: '/',
+					rejectUnauthorized: false,
+					timeout: 10000,
+				};
+
+				// 配置代理
+				if (settings.proxyUrl) {
+					try {
+						// @ts-ignore - ProxyAgent 支持字符串参数
+						options.agent = new ProxyAgent(settings.proxyUrl);
+						console.log('使用代理测试:', settings.proxyUrl);
+					} catch (error) {
+						console.error('创建代理Agent失败:', error);
+						resolve(false);
+						return;
+					}
+				} else if (settings.useSystemProxy) {
+					console.log('警告: 未配置手动代理，系统代理测试可能不可靠');
+				}
+
+				const req = https.request(options, (res: any) => {
+					req.destroy();
+					if (res.statusCode && (res.statusCode === 200 || res.statusCode === 301 || res.statusCode === 302)) {
+						resolve(true);
+					} else {
+						resolve(false);
+					}
+				});
+
+				req.on('error', (error: Error) => {
+					req.destroy();
+					console.error('代理测试失败:', error.message);
+					resolve(false);
+				});
+
+				req.on('timeout', () => {
+					req.destroy();
+					console.error('代理测试超时');
+					resolve(false);
+				});
+
+				req.end();
+			} catch (error) {
+				console.error('代理测试异常:', error);
+				resolve(false);
+			}
+		});
 	}
 }
