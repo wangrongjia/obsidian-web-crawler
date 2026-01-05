@@ -313,23 +313,39 @@ export class WebCrawler {
 			}
 
 			// 优先使用Electron的net模块（支持系统代理），否则使用Node.js http/https
-			const html = await this.fetchWithElectronNet(url, headers, settings);
+			let html = await this.fetchWithElectronNet(url, headers, settings);
+
+			// 如果是 V2EX 帖子，尝试获取所有分页的回复
+			if (url.includes('v2ex.com/t/')) {
+				html = await this.fetchAllV2EXPages(url, headers, settings, html);
+			}
 
 			// 解析HTML获取标题和内容
 			const { title, content } = this.extractContent(html, url);
 
 			// 检查是否为 V2EX 并提取回复
-			let finalContent = content;
+			let finalHtmlContent = content;
 			if (settings.includeReplies && url.includes('v2ex.com')) {
 				const replies = this.extractV2EXReplies(html);
+
 				if (replies.length > 0) {
-					console.log(`✓ 提取到 ${replies.length} 条 V2EX 回复`);
-					finalContent = content + '\n\n## 回复\n\n' + replies.map((r, i) => `**${i + 1}.** ${r.author}\n\n${r.content}`).join('\n\n---\n\n');
+					console.log(`✓ 显示 ${replies.length} 条回复（其中 ${replies.filter(r => r.likes > 0).length} 条有点赞）`);
+
+					// 将回复构建为 HTML，然后统一转换为 Markdown
+					let i = 0;
+					const repliesHtml = replies.map((r) => {
+						const likeBadge = r.likes > 0 ? ` <span style="color: #ff6b6b; font-weight: bold;">❤️ ${r.likes}</span>` : '';
+						return `<h3> ${i++} ${r.author}${likeBadge}</h3>\n\n${r.content}`;
+					}).join('\n\n<hr>\n\n');
+
+					finalHtmlContent = content + `\n\n<h2>回复（${replies.length} 条）</h2>\n\n` + repliesHtml;
+				} else {
+					console.log(`⚠️ 没有回复`);
 				}
 			}
 
 			// 将HTML转换为Markdown
-			const markdown = this.turndownService.turndown(finalContent || html);
+			const markdown = this.turndownService.turndown(finalHtmlContent || html);
 
 			return {
 				title: title || '未命名',
@@ -343,33 +359,100 @@ export class WebCrawler {
 	}
 
 	/**
-	 * 提取 V2EX 回复内容
+	 * 获取 V2EX 帖子的所有分页内容
 	 */
-	private extractV2EXReplies(html: string): Array<{ author: string; content: string }> {
-		const replies: Array<{ author: string; content: string }> = [];
-
-		// 匹配所有回复内容
-		const replyPattern = /<div[^>]*class=["'][^"']*cell[^"']*["'][^>]*>[\s\S]*?<div[^>]*class=["'][^"']*reply_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
-		const authorPattern = /<a[^>]*class=["'][^"']*avatar[^"']*["'][^>]*href=["']\/member\/([^"']+)["']/i;
-
-		let match;
-		let replyIndex = 0;
-		while ((match = replyPattern.exec(html)) !== null && replyIndex < 100) { // 最多提取100条回复
-			const contentBlock = match[0];
-			const content = match[1] || '';
-
-			// 提取作者
-			const authorMatch = contentBlock.match(authorPattern);
-			const author = authorMatch && authorMatch[1] ? authorMatch[1] : '匿名';
-
-			replies.push({
-				author,
-				content: this.stripHtmlTags(content).trim()
-			});
-
-			replyIndex++;
+	private async fetchAllV2EXPages(url: string, headers: Record<string, string>, settings: WebCrawlerPluginSettings, firstPageHtml: string): Promise<string> {
+		// 检查是否有分页
+		const maxPageMatch = firstPageHtml.match(/<a href=["']\/t\/\d+\?p=(\d+)["'][^>]*>\d+<\/a>\s*<span class=["']page_input["']>/);
+		if (!maxPageMatch || !maxPageMatch[1]) {
+			console.log('✓ V2EX 帖子无分页');
+			return firstPageHtml;
 		}
 
+		const maxPage = parseInt(maxPageMatch[1]);
+		console.log(`✓ V2EX 帖子有 ${maxPage} 页`);
+
+		if (maxPage < 2) {
+			return firstPageHtml;
+		}
+
+		// 获取所有分页
+		let allHtml = firstPageHtml;
+		for (let page = 2; page <= maxPage; page++) {
+			try {
+				const pageUrl = url + (url.includes('?') ? '&' : '?') + `p=${page}`;
+				console.log(`正在获取第 ${page}/${maxPage} 页...`);
+
+				const pageHtml = await this.fetchWithElectronNet(pageUrl, headers, settings);
+
+				// 提取回复部分并合并
+				const pageRepliesMatch = pageHtml.match(/<div id=["']Core["'][\s\S]*?<div id=["']Bottom["']/);
+				if (pageRepliesMatch) {
+					// 将当前页的回复插入到第一页的 </div> 之前
+					allHtml = allHtml.replace(/(<div id=["']Bottom["'])/, pageRepliesMatch[0] + '\n$1');
+				}
+
+				// 等待一下，避免请求过快
+				await new Promise(resolve => setTimeout(resolve, 500));
+			} catch (error) {
+				console.error(`获取第 ${page} 页失败:`, error);
+				// 继续获取下一页
+			}
+		}
+
+		console.log(`✓ 已合并所有分页内容`);
+		return allHtml;
+	}
+
+	/**
+	 * 提取 V2EX 回复内容
+	 */
+	private extractV2EXReplies(html: string): Array<{ author: string; content: string; likes: number }> {
+		const replies: Array<{ author: string; content: string; likes: number }> = [];
+
+		// 匹配每个回复区块 - 使用更简单的模式
+		const replyBlockPattern = /<div[^>]*id=["']r_\d+["'][^>]*class=["'][^"']*cell[^"']*["'][^>]*>[\s\S]*?<\/table>[\s\S]*?<\/div>/gi;
+
+		const authorPattern = /<strong><a[^>]*href=["']\/member\/([^"']+)["'][^>]*class=["'][^"']*dark[^"']*["'][^>]*>([^<]*)<\/a><\/strong>/i;
+		const contentPattern = /<div[^>]*class=["'][^"']*reply_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i;
+		// 匹配点赞信息：<span class="small fade"><img ... alt="❤️" /> 数字</span>
+		const likePattern = /<span class=["']small fade["'][^>]*>[\s\S]*?<img[^>]*alt=["']❤️["'][^>]*>\s*(\d+)[\s\S]*?<\/span>/i;
+
+		let match;
+		while ((match = replyBlockPattern.exec(html)) !== null) {
+			const block = match[0] || '';
+
+			// 提取作者
+			const authorMatch = block.match(authorPattern);
+			let author = '匿名';
+			if (authorMatch) {
+				const authorName = authorMatch[2] && authorMatch[2].trim() ? authorMatch[2].trim() : authorMatch[1];
+				author = authorName || '匿名';
+			}
+
+			// 提取内容
+			const contentMatch = block.match(contentPattern);
+			const content = contentMatch && contentMatch[1] ? contentMatch[1] : '';
+
+			// 提取点赞数
+			const likeMatch = block.match(likePattern);
+			const likes = likeMatch && likeMatch[1] ? parseInt(likeMatch[1]) : 0;
+
+			// 只保存有内容的回复
+			if (content.trim()) {
+				replies.push({
+					author,
+					content: content.trim(),
+					likes
+				});
+
+				if (likes > 0) {
+					console.log(`提取回复: ${author} ❤️ ${likes}`);
+				}
+			}
+		}
+
+		console.log(`✓ 总共提取 ${replies.length} 条回复，其中 ${replies.filter(r => r.likes > 0).length} 条有点赞`);
 		return replies;
 	}
 

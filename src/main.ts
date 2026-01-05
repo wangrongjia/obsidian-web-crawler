@@ -69,8 +69,8 @@ export default class WebCrawlerPlugin extends Plugin {
 				await this.app.vault.createFolder(folderPath);
 			}
 
-			// 创建文件内容
-			const fileContent = `# ${title}\n\n**来源**: [${url}](${url})\n\n**爬取时间**: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n${content}`;
+			// 创建文件内容（不包含一级标题，因为文件名就是标题）
+			const fileContent = `**来源**: [${url}](${url})\n\n**爬取时间**: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n${content}`;
 
 			// 创建文件
 			let file: TFile;
@@ -100,7 +100,7 @@ export default class WebCrawlerPlugin extends Plugin {
 			}
 
 			if (activeEditor && activeView) {
-				const linkText = `[${title}](${this.app.metadataCache.fileToLinktext(file, activeView.file?.path || '')})`;
+				const linkText = `[[${title}]]`;
 				activeEditor.replaceSelection(linkText);
 				new Notice('链接已插入到当前文件');
 			} else {
