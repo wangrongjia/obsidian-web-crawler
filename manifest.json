@@ -1,0 +1,10 @@
+{
+	"id": "web-crawler-plugin",
+	"name": "Web Crawler Plugin",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "爬取网页内容并转换为Markdown文件，支持需要登录的网站。",
+	"author": "Your Name",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}
