@@ -269,7 +269,11 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 	 */
 	async testProxy(settings: WebCrawlerPluginSettings): Promise<boolean> {
 		const https = require('https');
-		const { ProxyAgent } = require('proxy-agent');
+		const { HttpsProxyAgent } = require('https-proxy-agent');
+
+		console.log('========== 开始测试代理 ==========');
+		console.log('代理配置:', settings.proxyUrl);
+		console.log('使用系统代理:', settings.useSystemProxy);
 
 		return new Promise((resolve) => {
 			try {
@@ -278,48 +282,56 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 					hostname: 'www.google.com',
 					path: '/',
 					rejectUnauthorized: false,
-					timeout: 10000,
+					timeout: 15000, // 增加超时时间到15秒
 				};
 
 				// 配置代理
 				if (settings.proxyUrl) {
 					try {
-						// @ts-ignore - ProxyAgent 支持字符串参数
-						options.agent = new ProxyAgent(settings.proxyUrl);
-						console.log('使用代理测试:', settings.proxyUrl);
+						const agent = new HttpsProxyAgent(settings.proxyUrl);
+						options.agent = agent;
+						console.log('✓ 代理Agent已创建:', settings.proxyUrl);
 					} catch (error) {
-						console.error('创建代理Agent失败:', error);
+						console.error('✗ 创建代理Agent失败:', error);
 						resolve(false);
 						return;
 					}
-				} else if (settings.useSystemProxy) {
-					console.log('警告: 未配置手动代理，系统代理测试可能不可靠');
+				} else {
+					console.log('⚠ 未配置代理URL');
+					if (settings.useSystemProxy) {
+						console.log('⚠ 仅启用了系统代理，但Obsidian中可能无法直接使用');
+					}
 				}
 
+				console.log('开始发送请求到 google.com...');
 				const req = https.request(options, (res: any) => {
+					console.log('✓ 收到响应，状态码:', res.statusCode);
 					req.destroy();
 					if (res.statusCode && (res.statusCode === 200 || res.statusCode === 301 || res.statusCode === 302)) {
+						console.log('✓ 代理测试成功！');
 						resolve(true);
 					} else {
+						console.log('✗ 代理测试失败，状态码:', res.statusCode);
 						resolve(false);
 					}
 				});
 
 				req.on('error', (error: Error) => {
 					req.destroy();
-					console.error('代理测试失败:', error.message);
+					console.error('✗ 请求错误:', error.message);
+					console.error('✗ 错误堆栈:', error.stack);
 					resolve(false);
 				});
 
 				req.on('timeout', () => {
 					req.destroy();
-					console.error('代理测试超时');
+					console.error('✗ 请求超时（15秒）');
 					resolve(false);
 				});
 
 				req.end();
 			} catch (error) {
-				console.error('代理测试异常:', error);
+				console.error('✗ 代理测试异常:', error);
 				resolve(false);
 			}
 		});

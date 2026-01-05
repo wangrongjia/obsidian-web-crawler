@@ -3,7 +3,8 @@ import { LoginConfig, WebCrawlerPluginSettings } from './settings';
 import * as https from 'https';
 import * as http from 'http';
 import { URL } from 'url';
-import { ProxyAgent } from 'proxy-agent';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { HttpProxyAgent } from 'http-proxy-agent';
 
 // 导入turndown
 import TurndownService from 'turndown';
@@ -234,10 +235,14 @@ export class WebCrawler {
 				// 如果配置了代理，使用代理Agent
 				if (proxyUrl) {
 					try {
-						// ProxyAgent 会自动根据 proxyUrl 的协议（http/https/socks5/socks）选择合适的代理方式
-						// @ts-ignore - ProxyAgent 类型定义问题
-						const agent = new ProxyAgent(proxyUrl);
-						options.agent = agent;
+						// 根据目标URL协议选择合适的agent
+						if (isHttps) {
+							const agent = new HttpsProxyAgent(proxyUrl);
+							options.agent = agent;
+						} else {
+							const agent = new HttpProxyAgent(proxyUrl);
+							options.agent = agent;
+						}
 						console.log('已创建代理Agent，目标URL:', urlString, '代理:', proxyUrl);
 					} catch (error) {
 						console.error('创建代理Agent失败:', error);
