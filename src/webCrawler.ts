@@ -39,21 +39,39 @@ export class WebCrawler {
 	 */
 	private matchesPattern(url: string, pattern: string): boolean {
 		if (!pattern) return false;
-		
+
 		// 将通配符模式转换为正则表达式
 		const regexPattern = pattern
 			.replace(/[.+?^${}()|[\]\\]/g, '\\$&')  // 转义特殊字符
 			.replace(/\*/g, '.*');  // 将*转换为.*
-		
-		const regex = new RegExp('^' + regexPattern + '$');
-		return regex.test(url);
+
+		const regex = new RegExp('^' + regexPattern + '$', 'i');  // 添加 'i' 标志，忽略大小写
+		const matched = regex.test(url);
+
+		if (!matched) {
+			// 尝试标准化 URL 后再匹配（处理 www 的问题）
+			const normalizedPattern = pattern.replace('://www.', '://').replace('://', '://(www\\.)?');
+			const normalizedRegex = new RegExp('^' + normalizedPattern + '$', 'i');
+			return normalizedRegex.test(url);
+		}
+
+		return matched;
 	}
 
 	/**
 	 * 查找匹配的登录配置
 	 */
 	private findLoginConfig(url: string, loginConfigs: LoginConfig[]): LoginConfig | undefined {
-		return loginConfigs.find(config => this.matchesPattern(url, config.urlPattern));
+		const matchedConfig = loginConfigs.find(config => this.matchesPattern(url, config.urlPattern));
+
+		if (matchedConfig) {
+			console.log(`✓ 找到登录配置: ${matchedConfig.urlPattern}`);
+		} else {
+			console.log(`⚠️ 未找到匹配的登录配置，URL: ${url}`);
+			console.log(`   可用配置: ${loginConfigs.map(c => c.urlPattern).join(', ')}`);
+		}
+
+		return matchedConfig;
 	}
 
 	/**
@@ -310,10 +328,26 @@ export class WebCrawler {
 			// 添加Cookie
 			if (loginConfig?.cookies) {
 				headers['Cookie'] = loginConfig.cookies;
+				console.log(`✓ 已添加 Cookie，长度: ${loginConfig.cookies.length}`);
+			} else {
+				console.log(`⚠️ 未配置 Cookie`);
 			}
 
-			// 优先使用Electron的net模块（支持系统代理），否则使用Node.js http/https
-			let html = await this.fetchWithElectronNet(url, headers, settings);
+
+				// 优先使用Electron的net模块（支持系统代理），否则使用Node.js http/https
+			let	html = await this.fetchWithElectronNet(url, headers, settings);
+
+			// 调试：保存原始HTML到插件目录
+			try {
+				const fs = require('fs');
+				const path = require('path');
+				const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+				const debugFile = path.join(process.cwd(), `debug-${timestamp}.html`);
+				fs.writeFileSync(debugFile, html, 'utf8');
+				console.log(`✓ 已保存原始HTML到: ${debugFile}`);
+			} catch (err) {
+				console.log(`⚠️ 无法保存调试HTML: ${err instanceof Error ? err.message : String(err)}`);
+			}
 
 			// 如果是 V2EX 帖子，尝试获取所有分页的回复
 			if (url.includes('v2ex.com/t/')) {
@@ -362,8 +396,8 @@ export class WebCrawler {
 	 * 获取 V2EX 帖子的所有分页回复
 	 */
 	private async fetchAllV2EXPages(url: string, headers: Record<string, string>, settings: WebCrawlerPluginSettings, firstPageHtml: string): Promise<string> {
-		// 从"XX 条回复"中提取总回复数
-		const replyCountMatch = firstPageHtml.match(/(\d+)\s*条回复/);
+		// 从"XX 条回复"或"XX replies"中提取总回复数（支持中英文）
+		const replyCountMatch = firstPageHtml.match(/(\d+)\s*(条回复|replies|reply)/i);
 		if (!replyCountMatch || !replyCountMatch[1]) {
 			console.log('✓ V2EX 帖子无回复数信息，无需分页');
 			return firstPageHtml;
@@ -502,12 +536,29 @@ export class WebCrawler {
 		let content = '';
 		let isV2EX = false;
 
-		// 1. 优先尝试 V2EX 特定的 topic_content
-		const v2exMatch = html.match(/<div[^>]*class=["'][^"']*topic_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+		// 1. 优先尝试 V2EX 特定的 topic_content（处理需要登录的情况）
+		// 先尝试匹配嵌套结构的正文内容：<div class="topic_content"><div class="markdown_body">
+		let v2exMatch = html.match(/<div[^>]*class=["'][^"']*topic_content[^"']*["'][^>]*>\s*<div[^>]*class=["'][^"']*markdown_body[^"']*["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>/i);
 		if (v2exMatch && v2exMatch[1]) {
 			content = v2exMatch[1];
 			isV2EX = true;
-			console.log('✓ 使用 V2EX topic_content 提取');
+			console.log('✓ 使用 V2EX topic_content (嵌套结构) 提取');
+		}
+
+		// 如果没找到，尝试匹配普通结构：<div class="topic_content">内容</div>
+		if (!content) {
+			v2exMatch = html.match(/<div[^>]*class=["'][^"']*topic_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+			if (v2exMatch && v2exMatch[1]) {
+				// 检查是否包含登录提示，如果包含则跳过
+				const hasLoginHint = v2exMatch[1].includes('需要登录') || v2exMatch[1].includes('登录后');
+				if (!hasLoginHint) {
+					content = v2exMatch[1];
+					isV2EX = true;
+					console.log('✓ 使用 V2EX topic_content (普通结构) 提取');
+				} else {
+					console.log('⚠️ 跳过包含登录提示的 topic_content');
+				}
+			}
 		}
 
 		// 2. 尝试提取 article 标签
