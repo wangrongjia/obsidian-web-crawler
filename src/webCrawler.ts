@@ -335,7 +335,7 @@ export class WebCrawler {
 					let i = 0;
 					const repliesHtml = replies.map((r) => {
 						const likeBadge = r.likes > 0 ? ` <span style="color: #ff6b6b; font-weight: bold;">❤️ ${r.likes}</span>` : '';
-						return `<h3> ${i++} ${r.author}${likeBadge}</h3>\n\n${r.content}`;
+						return `<h3> ${++i} ${r.author}${likeBadge}</h3>\n\n${r.content}`;
 					}).join('\n\n<hr>\n\n');
 
 					finalHtmlContent = content + `\n\n<h2>回复（${replies.length} 条）</h2>\n\n` + repliesHtml;
@@ -359,37 +359,57 @@ export class WebCrawler {
 	}
 
 	/**
-	 * 获取 V2EX 帖子的所有分页内容
+	 * 获取 V2EX 帖子的所有分页回复
 	 */
 	private async fetchAllV2EXPages(url: string, headers: Record<string, string>, settings: WebCrawlerPluginSettings, firstPageHtml: string): Promise<string> {
-		// 检查是否有分页
-		const maxPageMatch = firstPageHtml.match(/<a href=["']\/t\/\d+\?p=(\d+)["'][^>]*>\d+<\/a>\s*<span class=["']page_input["']>/);
-		if (!maxPageMatch || !maxPageMatch[1]) {
-			console.log('✓ V2EX 帖子无分页');
+		// 从"XX 条回复"中提取总回复数
+		const replyCountMatch = firstPageHtml.match(/(\d+)\s*条回复/);
+		if (!replyCountMatch || !replyCountMatch[1]) {
+			console.log('✓ V2EX 帖子无回复数信息，无需分页');
 			return firstPageHtml;
 		}
 
-		const maxPage = parseInt(maxPageMatch[1]);
-		console.log(`✓ V2EX 帖子有 ${maxPage} 页`);
+		const totalReplies = parseInt(replyCountMatch[1]);
+		console.log(`✓ V2EX 帖子共有 ${totalReplies} 条回复`);
 
-		if (maxPage < 2) {
+		// 每页100条回复，计算需要多少页
+		const repliesPerPage = 100;
+		const totalPages = Math.ceil(totalReplies / repliesPerPage);
+
+		if (totalPages < 2) {
+			console.log('✓ 回复未超过100条，无需分页');
 			return firstPageHtml;
 		}
 
-		// 获取所有分页
-		let allHtml = firstPageHtml;
-		for (let page = 2; page <= maxPage; page++) {
+		console.log(`✓ 需要拉取 ${totalPages} 页内容`);
+
+		// 去掉 URL 中的 hash 部分（#replyxxx），并去掉已有的查询参数
+		const urlWithoutHash = url.split('#')[0] || url;
+		const baseUrl = urlWithoutHash.split('?')[0] || urlWithoutHash;
+		console.log(`基础URL: ${baseUrl}`);
+
+		// 获取所有分页的回复（只用 Node.js 方式，带代理）
+		for (let page = 2; page <= totalPages; page++) {
 			try {
-				const pageUrl = url + (url.includes('?') ? '&' : '?') + `p=${page}`;
-				console.log(`正在获取第 ${page}/${maxPage} 页...`);
+				const pageUrl = `${baseUrl}?p=${page}`;
+				console.log(`正在获取第 ${page}/${totalPages} 页: ${pageUrl}`);
 
-				const pageHtml = await this.fetchWithElectronNet(pageUrl, headers, settings);
+				// 使用 Node.js 方式获取分页（带代理）
+				const pageHtml = await this.fetchWithNode(pageUrl, headers, settings);
 
-				// 提取回复部分并合并
-				const pageRepliesMatch = pageHtml.match(/<div id=["']Core["'][\s\S]*?<div id=["']Bottom["']/);
-				if (pageRepliesMatch) {
-					// 将当前页的回复插入到第一页的 </div> 之前
-					allHtml = allHtml.replace(/(<div id=["']Bottom["'])/, pageRepliesMatch[0] + '\n$1');
+				// 提取所有回复 div（从第一个回复开始到 Bottom 之前）
+				// 使用字符串查找而不是正则，更可靠
+				const repliesStart = pageHtml.indexOf('<div id="r_');
+				const bottomPos = pageHtml.indexOf('<div id="Bottom">');
+
+				if (repliesStart !== -1 && bottomPos !== -1 && bottomPos > repliesStart) {
+					// 提取所有回复内容
+					const allReplies = pageHtml.substring(repliesStart, bottomPos);
+					// 将回复插入到第一页的 <div id="Bottom"> 之前
+					firstPageHtml = firstPageHtml.replace(/(<div id="Bottom">)/, allReplies + '\n$1');
+					console.log(`✓ 已合并第 ${page} 页的回复`);
+				} else {
+					console.log(`⚠️ 第 ${page} 页未找到回复内容`);
 				}
 
 				// 等待一下，避免请求过快
@@ -400,8 +420,8 @@ export class WebCrawler {
 			}
 		}
 
-		console.log(`✓ 已合并所有分页内容`);
-		return allHtml;
+		console.log(`✓ 已合并所有分页的回复`);
+		return firstPageHtml;
 	}
 
 	/**
