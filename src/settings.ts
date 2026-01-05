@@ -14,13 +14,15 @@ export interface WebCrawlerPluginSettings {
 	loginConfigs: LoginConfig[];  // 登录配置列表
 	proxyUrl: string;  // 代理URL，例如: http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
 	useSystemProxy: boolean;  // 是否自动使用系统代理
+	includeReplies: boolean;  // 是否包含回复内容（适用于论坛类网站）
 }
 
 export const DEFAULT_SETTINGS: WebCrawlerPluginSettings = {
 	savePath: 'WebCrawler',
 	loginConfigs: [],
 	proxyUrl: '',
-	useSystemProxy: true
+	useSystemProxy: true,
+	includeReplies: true  // 默认包含回复
 }
 
 export class WebCrawlerSettingTab extends PluginSettingTab {
@@ -136,6 +138,19 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 						testButton.setDisabled(false);
 						testButton.setButtonText('测试代理');
 					}
+				}));
+
+		containerEl.createEl('hr');
+
+		// 内容提取选项
+		new Setting(containerEl)
+			.setName('包含回复内容')
+			.setDesc('对于论坛类网站（如 V2EX），是否包含评论/回复内容')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.includeReplies)
+				.onChange(async (value) => {
+					this.plugin.settings.includeReplies = value;
+					await this.plugin.saveSettings();
 				}));
 
 		containerEl.createEl('hr');

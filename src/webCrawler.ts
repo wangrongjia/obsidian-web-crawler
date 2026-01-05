@@ -297,7 +297,7 @@ export class WebCrawler {
 	async fetchWebContent(url: string, loginConfigs: LoginConfig[], settings: WebCrawlerPluginSettings): Promise<{ title: string; content: string; html: string }> {
 		try {
 			const loginConfig = this.findLoginConfig(url, loginConfigs);
-			
+
 			// 构建请求头
 			const headers: Record<string, string> = {
 				'User-Agent': loginConfig?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -314,12 +314,22 @@ export class WebCrawler {
 
 			// 优先使用Electron的net模块（支持系统代理），否则使用Node.js http/https
 			const html = await this.fetchWithElectronNet(url, headers, settings);
-			
+
 			// 解析HTML获取标题和内容
 			const { title, content } = this.extractContent(html, url);
 
+			// 检查是否为 V2EX 并提取回复
+			let finalContent = content;
+			if (settings.includeReplies && url.includes('v2ex.com')) {
+				const replies = this.extractV2EXReplies(html);
+				if (replies.length > 0) {
+					console.log(`✓ 提取到 ${replies.length} 条 V2EX 回复`);
+					finalContent = content + '\n\n## 回复\n\n' + replies.map((r, i) => `**${i + 1}.** ${r.author}\n\n${r.content}`).join('\n\n---\n\n');
+				}
+			}
+
 			// 将HTML转换为Markdown
-			const markdown = this.turndownService.turndown(content || html);
+			const markdown = this.turndownService.turndown(finalContent || html);
 
 			return {
 				title: title || '未命名',
@@ -330,6 +340,37 @@ export class WebCrawler {
 			console.error('爬取网页失败:', error);
 			throw new Error(`爬取失败: ${error instanceof Error ? error.message : String(error)}`);
 		}
+	}
+
+	/**
+	 * 提取 V2EX 回复内容
+	 */
+	private extractV2EXReplies(html: string): Array<{ author: string; content: string }> {
+		const replies: Array<{ author: string; content: string }> = [];
+
+		// 匹配所有回复内容
+		const replyPattern = /<div[^>]*class=["'][^"']*cell[^"']*["'][^>]*>[\s\S]*?<div[^>]*class=["'][^"']*reply_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
+		const authorPattern = /<a[^>]*class=["'][^"']*avatar[^"']*["'][^>]*href=["']\/member\/([^"']+)["']/i;
+
+		let match;
+		let replyIndex = 0;
+		while ((match = replyPattern.exec(html)) !== null && replyIndex < 100) { // 最多提取100条回复
+			const contentBlock = match[0];
+			const content = match[1] || '';
+
+			// 提取作者
+			const authorMatch = contentBlock.match(authorPattern);
+			const author = authorMatch && authorMatch[1] ? authorMatch[1] : '匿名';
+
+			replies.push({
+				author,
+				content: this.stripHtmlTags(content).trim()
+			});
+
+			replyIndex++;
+		}
+
+		return replies;
 	}
 
 	/**
@@ -354,37 +395,76 @@ export class WebCrawler {
 			}
 		}
 
-		// 提取主要内容 - 尝试找到main、article或content相关的标签
-		let content = html;
-		
-		// 尝试提取article标签
-		const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
-		if (articleMatch && articleMatch[1]) {
-			content = articleMatch[1];
-		} else {
-			// 尝试提取main标签
+		// 提取主要内容 - 按优先级尝试不同的匹配方式
+		let content = '';
+		let isV2EX = false;
+
+		// 1. 优先尝试 V2EX 特定的 topic_content
+		const v2exMatch = html.match(/<div[^>]*class=["'][^"']*topic_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+		if (v2exMatch && v2exMatch[1]) {
+			content = v2exMatch[1];
+			isV2EX = true;
+			console.log('✓ 使用 V2EX topic_content 提取');
+		}
+
+		// 2. 尝试提取 article 标签
+		if (!content) {
+			const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+			if (articleMatch && articleMatch[1]) {
+				content = articleMatch[1];
+				console.log('✓ 使用 article 标签提取');
+			}
+		}
+
+		// 3. 尝试提取 main 标签
+		if (!content) {
 			const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
 			if (mainMatch && mainMatch[1]) {
 				content = mainMatch[1];
-			} else {
-				// 尝试提取id或class包含content的div
-				const contentDivMatch = html.match(/<div[^>]*(?:id|class)=["'](?:[^"']*content[^"']*)["'][^>]*>([\s\S]*?)<\/div>/i);
-				if (contentDivMatch && contentDivMatch[1]) {
-					content = contentDivMatch[1];
-				} else {
-					// 尝试提取body标签内容
-					const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-					if (bodyMatch && bodyMatch[1]) {
-						content = bodyMatch[1];
-					}
+				console.log('✓ 使用 main 标签提取');
+			}
+		}
+
+		// 4. 尝试提取特定的高质量内容选择器
+		if (!content) {
+			// 尝试多种常见的文章内容 class/id 模式
+			const patterns = [
+				/<div[^>]*class=["'][^"']*post[-_]?content[^"']*["'][^>]*>([\s\S]{100,2000})<\/div>/i,
+				/<div[^>]*id=["']content["'][^>]*>([\s\S]*?)<\/div>/i,
+				/<div[^>]*class=["']content["'][^>]*>([\s\S]*?)<\/div>/i,
+				/<div[^>]*itemprop=["']articleBody["'][^>]*>([\s\S]*?)<\/div>/i,
+			];
+
+			for (const pattern of patterns) {
+				const match = html.match(pattern);
+				if (match && match[1] && match[1].length > 50) {
+					content = match[1];
+					console.log('✓ 使用通用内容模式提取');
+					break;
 				}
 			}
+		}
+
+		// 5. 最后尝试提取 body 标签内容（排除导航等）
+		if (!content) {
+			const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+			if (bodyMatch && bodyMatch[1]) {
+				content = bodyMatch[1];
+				console.log('⚠ 使用 body 标签提取，可能包含无关内容');
+			}
+		}
+
+		if (!content) {
+			console.log('⚠ 未能提取到内容，使用原始 HTML');
+			content = html;
 		}
 
 		// 移除script和style标签
 		content = content.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
 		content = content.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
 		content = content.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+
+		console.log('提取的内容长度:', content.length);
 
 		return { title, content };
 	}
