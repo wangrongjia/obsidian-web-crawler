@@ -1,90 +1,191 @@
-# Obsidian Sample Plugin
+# Web Crawler Plugin
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+[![Release](https://img.shields.io/badge/dynamic/json?color=blue&label=Release&prefix=v&query=%24.version&url=https%3A%2F%2Fraw.githubusercontent.com%2F[USERNAME]%2Fobsidian-web-crawler%2Fmain%2Fmanifest.json)](https://github.com/[USERNAME]/obsidian-web-crawler/releases)
+[![Downloads](https://img.shields.io/badge/dynamic/json?color=success&label=Downloads&query=%24.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-releases%2Fmaster%2Fplugin-updates.json)](https://obsidian.md/plugins?id=obsidian-web-crawler)
+[![License](https://img.shields.io/badge/license-BSD%200--Clause-blue.svg)](LICENSE)
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+An Obsidian plugin that crawls web pages and converts them to Markdown files. Supports websites that require authentication via cookies, including Twitter/X, Reddit, Zhihu, and more.
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+## 🌟 Features
 
-## First time developing plugins?
+- **One-Click Crawling**: Crawl any web page and save it as a Markdown file with a single click
+- **Smart Content Extraction**: Automatically extracts title, main content, images, and metadata
+- **Login Support**: Configure cookies for websites that require authentication
+- **Proxy Support**: Built-in proxy configuration for accessing international websites
+- **Dynamic Content**: Uses Playwright for JavaScript-heavy sites (Twitter/X, etc.)
+- **Specialized Optimizations**: Custom extractors for popular platforms:
+  - Twitter/X: Tweets with images and author info
+  - Reddit: Posts with automatic title extraction from URL
+  - Zhihu: Q&A content with image lazy-loading support
+  - V2EX: Forum posts with replies
+- **Obsidian Properties**: Saves source URL and timestamp as file properties
+- **Auto Link Insertion**: Optionally inserts links to the created file in your current editor
 
-Quick starting guide for new plugin devs:
+## 📸 Usage
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+### Basic Usage
 
-## Releasing new releases
+1. **Via Command Palette** (Ctrl/Cmd+P)
+   - Type `Web Crawler: 爬取网页内容`
+   - Enter the URL
+   - The plugin will crawl and save the page
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+2. **Via Ribbon Icon**
+   - Click the link icon in the left ribbon
+   - Enter the URL
+   - The content will be saved to your vault
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+3. **From Editor**
+   - Use `Web Crawler: 爬取网页内容并插入链接`
+   - The plugin will insert a link to the created file in your current editor position
 
-## Adding your plugin to the community plugin list
+### Configuration
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+#### Proxy Settings
 
-## How to use
+Go to `Settings → Community Plugins → Web Crawler Plugin → Options`:
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+1. **Use System Proxy**: Enable if your system has a proxy configured
+2. **Proxy Server**: Manually configure proxy (e.g., `http://127.0.0.1:7890`)
+3. **Quick Setup**: Choose from presets:
+   - Clash Verge - HTTP (127.0.0.1:7897)
+   - Clash - HTTP (127.0.0.1:7890)
+   - V2RayN - HTTP (127.0.0.1:10809)
+   - And more...
 
-## Manually installing the plugin
+#### Login Configuration (for websites requiring authentication)
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+For sites like Twitter/X, Zhihu, or private forums:
 
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
+1. Scroll to "Login Configuration" section
+2. Click "Add Login Configuration"
+3. Fill in:
+   - **URL Pattern**: Match pattern (e.g., `https://twitter.com/*`, `https://www.zhihu.com/*`)
+   - **Cookies**: Your cookie string from browser DevTools
+     - Open browser DevTools (F12) in your browser
+     - Go to Network tab
+     - Refresh the page
+     - Find any request and copy the `Cookie` header value
+     - Format: `key1=value1; key2=value2; key3=value3`
+   - **User-Agent** (optional): Custom user agent string
+4. Save settings
 
-## Funding URL
+**Note**: Only cookies are supported. Username/password authentication is not available.
 
-You can include funding URLs where people who use your plugin can financially support it.
+#### Save Path
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+Configure where to save crawled content (default: `WebCrawler` folder in your vault).
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+## 🚀 Advanced Features
+
+### Twitter/X Support
+
+For Twitter/X posts, the plugin uses a local Playwright server:
+
+1. **Start the local server** (one-time setup):
+   ```bash
+   node server.cjs
+   ```
+
+2. **Configure proxy** in plugin settings (Twitter/X requires VPN)
+
+3. **Crawl tweets**:
+   - Extracts tweet text, author info, images
+   - Generates filename from tweet content
+   - Images saved in high resolution
+
+### V2EX Forum
+
+- Automatically detects and includes replies
+- Clean formatting for forum discussions
+
+### Custom Extractors
+
+The plugin uses smart content detection:
+- Article tags (`<article>`, `<main>`)
+- Common content class names
+- Fallback to body content
+
+## 📦 Output Format
+
+Crawled content is saved with Obsidian properties:
+
+```markdown
+---
+来源: https://example.com/article
+时间: 2026-01-06 10:30:45
+---
+
+# Article Title
+
+Article content goes here...
 ```
 
-If you have multiple URLs, you can also do:
+## ⚙️ Settings
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
+| Setting | Description |
+|---------|-------------|
+| **Save Path** | Folder to save crawled files (relative to vault root) |
+| **Use System Proxy** | Use system/browser proxy settings |
+| **Proxy Server** | Manual proxy configuration |
+| **Include Replies** | Include forum replies (V2EX, etc.) |
+| **Login Configs** | Cookie configurations for private websites |
+
+## 🛠️ Development
+
+### Building
+
+```bash
+npm install
+npm run build
 ```
 
-## API Documentation
+### Development Mode
 
-See https://docs.obsidian.md
+```bash
+npm run dev
+```
+
+### Linting
+
+```bash
+npm run lint
+```
+
+## 📝 Changelog
+
+### Version 1.0.0
+- Initial release
+- Support for basic web crawling
+- Twitter/X, Reddit, Zhihu, V2EX optimizations
+- Proxy and login configuration
+- Obsidian properties support
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📄 License
+
+BSD 0-Clause License - see [LICENSE](LICENSE) for details.
+
+Copyright (C) 2020-2025 by Dynalist Inc.
+
+Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+## 🙏 Acknowledgments
+
+- Built with [Obsidian API](https://docs.obsidian.md)
+- Uses [Turndown](https://github.com/mixmark-io/turndown) for HTML to Markdown conversion
+- Uses [Playwright](https://playwright.dev/) for dynamic content
+
+## 📧 Support
+
+- Issues: [GitHub Issues](https://github.com/[USERNAME]/obsidian-web-crawler/issues)
+- Discussions: [GitHub Discussions](https://github.com/[USERNAME]/obsidian-web-crawler/discussions)
+
+---
+
+**Note**: This plugin is not affiliated with or endorsed by Obsidian.

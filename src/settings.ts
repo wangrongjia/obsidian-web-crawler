@@ -3,8 +3,6 @@ import WebCrawlerPlugin from "./main";
 
 export interface LoginConfig {
 	urlPattern: string;  // URL匹配模式，如 "https://example.com/*"
-	username?: string;
-	password?: string;
 	cookies?: string;    // Cookie字符串，格式: "key1=value1; key2=value2"
 	userAgent?: string;  // 自定义User-Agent
 }
@@ -187,8 +185,6 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 				.onClick(() => {
 					const newConfig: LoginConfig = {
 						urlPattern: '',
-						username: '',
-						password: '',
 						cookies: '',
 						userAgent: ''
 					};
@@ -231,30 +227,6 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 					config.urlPattern = value;
 					await this.plugin.saveSettings();
 				}));
-
-		new Setting(configContainer)
-			.setName('用户名')
-			.setDesc('登录用户名（可选）')
-			.addText(text => text
-				.setPlaceholder('username')
-				.setValue(config.username || '')
-				.onChange(async (value) => {
-					config.username = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(configContainer)
-			.setName('密码')
-			.setDesc('登录密码（可选）')
-			.addText(text => {
-				text.setPlaceholder('password')
-					.setValue(config.password || '');
-				text.inputEl.type = 'password';
-				text.onChange(async (value) => {
-					config.password = value;
-					await this.plugin.saveSettings();
-				});
-			});
 
 		new Setting(configContainer)
 			.setName('Cookies')
