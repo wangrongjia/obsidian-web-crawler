@@ -367,7 +367,7 @@ export class WebCrawler {
 			let content: string;
 
 			// Twitter/X 使用特殊的内容提取
-			if (url.includes('x.com') || url.includes('twitter.com')) {
+			if (url.includes('//x.com') || url.includes('twitter.com')) {
 				const extracted = this.extractTwitterContent(html);
 				title = extracted.title;
 				content = extracted.content;
@@ -402,7 +402,7 @@ export class WebCrawler {
 			// 将HTML转换为Markdown
 			// 注意：Twitter/X 的 content 已经是 Markdown 格式，不需要再转换
 			let markdown: string;
-			if (url.includes('x.com') || url.includes('twitter.com')) {
+			if (url.includes('//x.com') || url.includes('twitter.com')) {
 				// Twitter 的内容已经手动格式化好了，直接使用
 				markdown = content;
 			} else {
@@ -647,6 +647,15 @@ export class WebCrawler {
 		content = content.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
 		content = content.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
 
+		// 知乎图片特殊处理：将 data-actualsrc 转换为 src
+		if (url.includes('zhihu.com')) {
+			// 知乎使用懒加载，真实图片URL在 data-actualsrc 中
+			content = content.replace(/<img[^>]*data-actualsrc=["']([^"']+)["'][^>]*>/gi, (match, url) => {
+				return `<img src="${url}" />`;
+			});
+			console.log('✓ 已处理知乎懒加载图片');
+		}
+
 		console.log('提取的内容长度:', content.length);
 
 		return { title, content };
@@ -690,7 +699,7 @@ export class WebCrawler {
 	 */
 	private needsPlaywright(url: string): boolean {
 		const playwrightPatterns = [
-			/x\.com/,
+			/\/\/x\.com/,
 			/twitter\.com/,
 		];
 
@@ -703,10 +712,27 @@ export class WebCrawler {
 	private async fetchWithLocalServer(url: string, settings: WebCrawlerPluginSettings): Promise<string> {
 		const http = require('http');
 
+		// 查找匹配的登录配置（获取cookies）
+		let cookies: string | undefined;
+		for (const config of settings.loginConfigs) {
+			try {
+				const pattern = config.urlPattern.replace(/\*/g, '.*');
+				const regex = new RegExp(pattern);
+				if (regex.test(url) && config.cookies) {
+					cookies = config.cookies;
+					console.log(`✓ 找到匹配的Cookie配置: ${config.urlPattern}`);
+					break;
+				}
+			} catch (e) {
+				// 忽略无效的正则表达式
+			}
+		}
+
 		return new Promise((resolve, reject) => {
 			const postData = JSON.stringify({
 				url: url,
-				proxy: settings.proxyUrl || undefined
+				proxy: settings.proxyUrl || undefined,
+				cookies: cookies
 			});
 
 			const options = {
@@ -873,5 +899,6 @@ export class WebCrawler {
 
 		return { title, content };
 	}
+
 }
 
