@@ -548,9 +548,34 @@ export class WebCrawler {
 
 		// 提取标题
 		let title = '';
-		const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-		if (titleMatch && titleMatch[1]) {
-			title = this.stripHtmlTags(titleMatch[1]).trim();
+
+		// Reddit 特殊处理：从 URL 中直接提取标题
+		if (url.includes('reddit.com')) {
+			try {
+				// Reddit URL 格式: https://www.reddit.com/r/subreddit/comments/post_id/title/
+				const urlParts = url.split('/').filter(part => part.length > 0);
+				// 找到 comments 部分，之后的部分就是 post_id 和 title
+				const commentsIndex = urlParts.findIndex(part => part === 'comments');
+				if (commentsIndex !== -1 && commentsIndex + 2 < urlParts.length) {
+					// title 在 comments 后面的第二个位置
+					const encodedTitle = urlParts[commentsIndex + 2];
+					if (encodedTitle) {
+						// URL decode
+						title = decodeURIComponent(encodedTitle).replace(/_/g, ' ');
+						console.log('✓ 从 Reddit URL 提取标题:', title);
+					}
+				}
+			} catch (e) {
+				console.log('⚠️ 从 URL 提取 Reddit 标题失败，尝试其他方法');
+			}
+		}
+
+		// 通用标题提取
+		if (!title) {
+			const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+			if (titleMatch && titleMatch[1]) {
+				title = this.stripHtmlTags(titleMatch[1]).trim();
+			}
 		}
 
 		// 如果没有title标签，尝试从h1获取

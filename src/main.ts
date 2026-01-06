@@ -69,8 +69,15 @@ export default class WebCrawlerPlugin extends Plugin {
 				await this.app.vault.createFolder(folderPath);
 			}
 
-			// 创建文件内容（不包含一级标题，因为文件名就是标题）
-			const fileContent = `**来源**: [${url}](${url})\n\n**爬取时间**: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n${content}`;
+			// 创建文件内容（使用 Obsidian Properties 格式）
+			const now = new Date();
+			const dateStr = now.toISOString().slice(0, 19).replace('T', ' '); // 格式：2024-01-06 12:30:45
+			const fileContent = `---
+来源: ${url}
+时间: ${dateStr}
+---
+
+${content}`;
 
 			// 创建文件
 			let file: TFile;
