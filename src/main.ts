@@ -49,6 +49,85 @@ export default class WebCrawlerPlugin extends Plugin {
 	}
 
 	/**
+	 * 获取光标位置的标题层级路径
+	 * @param editor 编辑器对象
+	 * @returns 标题层级路径数组，例如 ['生活', '医疗']，如果不在任何标题下则返回空数组
+	 */
+	getHeadingPath(editor: Editor): string[] {
+		const cursor = editor.getCursor();
+		const headingPath: {level: number, title: string}[] = [];
+
+		// 从光标位置向上查找所有的标题
+		for (let line = cursor.line; line >= 0; line--) {
+			const lineContent = editor.getLine(line).trim();
+
+			// 匹配 Markdown 标题：# 后面跟空格和标题文本
+			const headingMatch = lineContent.match(/^(#{1,6})\s+(.+)$/);
+
+			if (headingMatch) {
+				const level = headingMatch[1]?.length || 1; // 标题级别 1-6
+				const title = headingMatch[2]?.trim() || '';
+
+				// 清理路径，移除可能的格式符号
+				const cleanTitle = title.replace(/\[.*?\]/g, '').trim();
+
+				// 添加到临时路径
+				headingPath.unshift({level, title: cleanTitle});
+			}
+		}
+
+		// 从临时路径构建最终路径，只保留连续递增的层级
+		// 比如有 # A, # B, ## B1，应该返回 ["B", "B1"]，不包含 "A"
+		if (headingPath.length === 0) {
+			return [];
+		}
+
+		// 从后向前扫描，找到第一个"断层"点
+		// 例如：[{level:1, "A"}, {level:1, "B"}, {level:2, "B1"}]
+		// 应该从索引1开始，即 ["B", "B1"]
+		let finalPath: string[] = [];
+		let prevLevel = 0; // 0表示没有上一级
+
+		// 从最后一个标题向前检查
+		for (let i = headingPath.length - 1; i >= 0; i--) {
+			const current = headingPath[i];
+			if (!current) continue;
+
+			if (prevLevel === 0) {
+				// 第一个标题（最接近光标的），直接加入
+				finalPath.unshift(current.title);
+				prevLevel = current.level;
+			} else if (current.level < prevLevel) {
+				// 当前标题级别更小（级别更高），加入路径
+				finalPath.unshift(current.title);
+				prevLevel = current.level;
+			} else {
+				// 遇到同级或更低级别的标题，停止
+				break;
+			}
+		}
+
+		return finalPath;
+	}
+
+	/**
+	 * 获取标题文本的级别（通过查找其在文件中的定义）
+	 * 这个方法是辅助方法，用于比较标题级别
+	 */
+	private getHeadingLevel(editor: Editor, headingText: string): number {
+		const lineCount = editor.lineCount();
+		for (let i = 0; i < lineCount; i++) {
+			const lineContent = editor.getLine(i).trim();
+			const match = lineContent.match(/^#+\s+(.+)$/);
+			if (match && match[2]?.trim() === headingText) {
+				const hashMatch = lineContent.match(/^(#+)/);
+				return hashMatch?.[1]?.length || 1;
+			}
+		}
+		return 1;
+	}
+
+	/**
 	 * 爬取网页并创建文件
 	 */
 	async crawlAndCreateFile(url: string, editor?: Editor, view?: MarkdownView): Promise<void> {
@@ -60,13 +139,45 @@ export default class WebCrawlerPlugin extends Plugin {
 
 			// 生成文件名
 			const fileName = this.webCrawler.generateFileName(title);
-			const filePath = `${this.settings.savePath}/${fileName}.md`;
 
-			// 确保目录存在
-			const folderPath = this.settings.savePath;
-			const folder = this.app.vault.getAbstractFileByPath(folderPath);
-			if (!folder) {
-				await this.app.vault.createFolder(folderPath);
+			// 获取当前活动的编辑器，用于确定保存路径
+			let activeEditor = editor;
+			let activeView = view;
+
+			if (!activeEditor || !activeView) {
+				const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (activeMarkdownView) {
+					activeEditor = activeMarkdownView.editor;
+					activeView = activeMarkdownView;
+				}
+			}
+
+			// 确定保存路径
+			let folderPath = this.settings.savePath; // 默认路径
+			if (activeEditor) {
+				const headingPath = this.getHeadingPath(activeEditor);
+				if (headingPath.length > 0) {
+					// 如果光标在某个标题层级下，使用标题层级作为路径
+					folderPath = headingPath.join('/');
+					console.log(`根据光标位置确定保存路径: ${folderPath}`);
+				} else {
+					// 如果不在任何标题下，使用默认路径
+					console.log(`光标不在任何标题下，使用默认路径: ${folderPath}`);
+				}
+			}
+
+			const filePath = `${folderPath}/${fileName}.md`;
+
+			// 确保目录存在（递归创建）
+			const pathParts = folderPath.split('/');
+			let currentPath = '';
+			for (const part of pathParts) {
+				currentPath = currentPath ? `${currentPath}/${part}` : part;
+				const folder = this.app.vault.getAbstractFileByPath(currentPath);
+				if (!folder) {
+					await this.app.vault.createFolder(currentPath);
+					console.log(`已创建目录: ${currentPath}`);
+				}
 			}
 
 			// 创建文件内容（使用 Obsidian Properties 格式）
@@ -94,18 +205,6 @@ ${content}`;
 			}
 
 			// 尝试插入链接到当前编辑器
-			// 优先使用传入的editor，否则尝试获取当前活动的编辑器
-			let activeEditor = editor;
-			let activeView = view;
-
-			if (!activeEditor || !activeView) {
-				const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (activeMarkdownView) {
-					activeEditor = activeMarkdownView.editor;
-					activeView = activeMarkdownView;
-				}
-			}
-
 			if (activeEditor && activeView) {
 				const linkText = `[[${title}]]`;
 				activeEditor.replaceSelection(linkText);
