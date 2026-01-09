@@ -591,12 +591,19 @@ export class WebCrawler {
 		let isV2EX = false;
 
 		// 1. 优先尝试 V2EX 特定的 topic_content（处理需要登录的情况）
-		// 先尝试匹配嵌套结构的正文内容：<div class="topic_content"><div class="markdown_body">
-		let v2exMatch = html.match(/<div[^>]*class=["'][^"']*topic_content[^"']*["'][^>]*>\s*<div[^>]*class=["'][^"']*markdown_body[^"']*["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>/i);
+		// V2EX 结构：<div class="cell"><div class="topic_content">...</div></div>
+		// 提取 cell 标签下的 topic_content
+		let v2exMatch = html.match(/<div[^>]*class=["'][^"']*cell[^"']*["'][^>]*>\s*<div[^>]*class=["'][^"']*topic_content[^"']*["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>/i);
 		if (v2exMatch && v2exMatch[1]) {
-			content = v2exMatch[1];
-			isV2EX = true;
-			console.log('✓ 使用 V2EX topic_content (嵌套结构) 提取');
+			// 检查是否包含登录提示，如果包含则跳过
+			const hasLoginHint = v2exMatch[1].includes('需要登录') || v2exMatch[1].includes('登录后');
+			if (!hasLoginHint) {
+				content = v2exMatch[1];
+				isV2EX = true;
+				console.log('✓ 使用 V2EX cell > topic_content 结构提取');
+			} else {
+				console.log('⚠️ 跳过包含登录提示的 topic_content');
+			}
 		}
 
 		// 如果没找到，尝试匹配普通结构：<div class="topic_content">内容</div>
