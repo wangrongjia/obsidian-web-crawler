@@ -1,8 +1,39 @@
-/*
+/* Web Crawler Plugin Styles */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.web-crawler-input-container {
+	margin-bottom: 1rem;
+}
 
-If your plugin does not need CSS, delete this file.
+.web-crawler-url-input {
+	width: 100%;
+	padding: 0.5rem;
+}
 
-*/
+.web-crawler-button-container {
+	display: flex;
+	gap: 0.5rem;
+	justify-content: flex-end;
+}
+
+.web-crawler-crawl-button {
+	margin-top: 1rem;
+}
+
+/* Login config container styles */
+.login-config-container {
+	border: 1px solid var(--background-modifier-border);
+	padding: 1rem;
+	margin-bottom: 1rem;
+	border-radius: var(--radius-md);
+}
+
+.login-config-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 0.5rem;
+}
+
+.login-config-delete-button {
+	margin-left: auto;
+}

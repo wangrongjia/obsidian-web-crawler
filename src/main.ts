@@ -159,10 +159,6 @@ export default class WebCrawlerPlugin extends Plugin {
 				if (headingPath.length > 0) {
 					// 如果光标在某个标题层级下，使用标题层级作为路径
 					folderPath = headingPath.join('/');
-					console.log(`根据光标位置确定保存路径: ${folderPath}`);
-				} else {
-					// 如果不在任何标题下，使用默认路径
-					console.log(`光标不在任何标题下，使用默认路径: ${folderPath}`);
 				}
 			}
 
@@ -176,7 +172,6 @@ export default class WebCrawlerPlugin extends Plugin {
 				const folder = this.app.vault.getAbstractFileByPath(currentPath);
 				if (!folder) {
 					await this.app.vault.createFolder(currentPath);
-					console.log(`已创建目录: ${currentPath}`);
 				}
 			}
 
@@ -240,24 +235,22 @@ class UrlInputModal extends Modal {
 		contentEl.createEl('h2', {text: '爬取网页内容'});
 
 		const inputContainer = contentEl.createDiv();
-		inputContainer.style.marginBottom = '1rem';
+		inputContainer.addClass('web-crawler-input-container');
 
 		const urlInput = inputContainer.createEl('input', {
 			type: 'text',
 			placeholder: '请输入网页URL，例如: https://example.com/article',
-			attr: { style: 'width: 100%; padding: 0.5rem;' }
 		});
+		urlInput.addClass('web-crawler-url-input');
 
 		const buttonContainer = contentEl.createDiv();
-		buttonContainer.style.display = 'flex';
-		buttonContainer.style.gap = '0.5rem';
-		buttonContainer.style.justifyContent = 'flex-end';
+		buttonContainer.addClass('web-crawler-button-container');
 
 		const crawlButton = buttonContainer.createEl('button', {
 			text: '爬取',
-			attr: { style: 'margin-top: 1rem;' }
 		});
 		crawlButton.addClass('mod-cta');
+		crawlButton.addClass('web-crawler-crawl-button');
 
 		const cancelButton = buttonContainer.createEl('button', {
 			text: '取消'
@@ -272,23 +265,25 @@ class UrlInputModal extends Modal {
 		});
 
 		// 爬取按钮点击事件
-		crawlButton.addEventListener('click', async () => {
-			const url = urlInput.value.trim();
-			if (!url) {
-				new Notice('请输入有效的URL');
-				return;
-			}
+		crawlButton.addEventListener('click', () => {
+			void (async () => {
+				const url = urlInput.value.trim();
+				if (!url) {
+					new Notice('请输入有效的URL');
+					return;
+				}
 
-			// 验证URL格式
-			try {
-				new URL(url);
-			} catch (e) {
-				new Notice('URL格式不正确，请包含协议（http://或https://）');
-				return;
-			}
+				// 验证URL格式
+				try {
+					new URL(url);
+				} catch (e) {
+					new Notice('URL格式不正确，请包含协议（http://或https://）');
+					return;
+				}
 
-			this.close();
-			await this.plugin.crawlAndCreateFile(url, this.editor, this.view);
+				this.close();
+				await this.plugin.crawlAndCreateFile(url, this.editor, this.view);
+			})();
 		});
 
 		// 取消按钮

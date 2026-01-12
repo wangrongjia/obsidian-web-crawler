@@ -1,11 +1,5 @@
-import { Notice } from 'obsidian';
+import { Notice, requestUrl } from 'obsidian';
 import { LoginConfig, WebCrawlerPluginSettings } from './settings';
-import * as https from 'https';
-import * as http from 'http';
-import { URL } from 'url';
-import { HttpsProxyAgent } from 'https-proxy-agent';
-import { HttpProxyAgent } from 'http-proxy-agent';
-
 // 导入turndown
 import TurndownService from 'turndown';
 
@@ -65,10 +59,9 @@ export class WebCrawler {
 		const matchedConfig = loginConfigs.find(config => this.matchesPattern(url, config.urlPattern));
 
 		if (matchedConfig) {
-			console.log(`✓ 找到登录配置: ${matchedConfig.urlPattern}`);
+			console.debug(`Found login config: ${matchedConfig.urlPattern}`);
 		} else {
-			console.log(`⚠️ 未找到匹配的登录配置，URL: ${url}`);
-			console.log(`   可用配置: ${loginConfigs.map(c => c.urlPattern).join(', ')}`);
+			console.debug(`No matching login config found for URL: ${url}`);
 		}
 
 		return matchedConfig;
@@ -101,212 +94,31 @@ export class WebCrawler {
 	}
 
 	/**
-	 * 获取Electron的代理设置
-	 */
-	private async getElectronProxy(url: string): Promise<string | null> {
-		try {
-			const electron = (window as any).require?.('electron');
-			if (electron && electron.session) {
-				const session = electron.session.defaultSession;
-				if (session && session.resolveProxy) {
-					return new Promise((resolve) => {
-						session.resolveProxy(url, (proxy: string) => {
-							// proxy格式可能是 "PROXY 127.0.0.1:7890" 或 "DIRECT"
-							if (proxy && proxy !== 'DIRECT' && proxy.startsWith('PROXY')) {
-								const proxyMatch = proxy.match(/PROXY\s+([^\s]+)/);
-								if (proxyMatch && proxyMatch[1]) {
-									resolve(`http://${proxyMatch[1]}`);
-								} else {
-									resolve(null);
-								}
-							} else {
-								resolve(null);
-							}
-						});
-					});
-				}
-			}
-		} catch (error) {
-			console.error('获取代理设置失败:', error);
-		}
-		return null;
-	}
-
-	/**
-	 * 使用Electron的net模块获取网页内容（支持系统代理）
+	 * 使用 Obsidian 的 requestUrl API 获取网页内容（不受 CORS 限制）
 	 */
 	private async fetchWithElectronNet(urlString: string, headers: Record<string, string>, settings: WebCrawlerPluginSettings): Promise<string> {
-		// 尝试使用Electron的net模块，它会自动使用系统代理
-		const electron = (window as any).require?.('electron');
-		if (electron && electron.net) {
-			return new Promise((resolve, reject) => {
-				try {
-					const request = electron.net.request({
-						method: 'GET',
-						url: urlString,
-						headers: headers,
-						useSessionCookies: true, // 使用会话cookie
-					});
-
-					let timeoutId: NodeJS.Timeout | null = null;
-					
-					request.on('response', (response: any) => {
-						// 清除超时
-						if (timeoutId) {
-							clearTimeout(timeoutId);
-						}
-
-						// 处理重定向
-						if (response.statusCode >= 300 && response.statusCode < 400) {
-							const location = response.headers.location;
-							if (location) {
-								const redirectUrl = location.startsWith('http') ? location : new URL(location, urlString).href;
-								return resolve(this.fetchWithElectronNet(redirectUrl, headers, settings));
-							}
-						}
-
-						if (response.statusCode >= 400) {
-							reject(new Error(`HTTP错误: ${response.statusCode}`));
-							return;
-						}
-
-						let data = '';
-						response.on('data', (chunk: Buffer) => {
-							data += chunk.toString('utf8');
-						});
-
-						response.on('end', () => {
-							resolve(data);
-						});
-
-						response.on('error', (error: Error) => {
-							reject(error);
-						});
-					});
-
-					request.on('error', (error: Error) => {
-						if (timeoutId) {
-							clearTimeout(timeoutId);
-						}
-						reject(error);
-					});
-
-					// 设置超时
-					timeoutId = setTimeout(() => {
-						request.abort();
-						reject(new Error('请求超时'));
-					}, 60000); // 60秒超时
-
-					request.end();
-				} catch (error) {
-					reject(error);
-				}
-			});
-		}
-
-		// 如果Electron net不可用，回退到Node.js http/https（尝试使用系统代理）
 		return this.fetchWithNode(urlString, headers, settings);
 	}
 
 	/**
-	 * 使用Node.js http/https模块获取网页内容（尝试使用系统代理）
+	 * 使用 Obsidian 的 requestUrl API 获取网页内容（不受 CORS 限制）
 	 */
 	private async fetchWithNode(urlString: string, headers: Record<string, string>, settings: WebCrawlerPluginSettings): Promise<string> {
-		return new Promise(async (resolve, reject) => {
-			try {
-				const urlObj = new URL(urlString);
-				const isHttps = urlObj.protocol === 'https:';
-				const httpModule = isHttps ? https : http;
-
-				// 确定要使用的代理
-				// 优先级：手动配置的代理 > Electron系统代理 > 环境变量代理
-				let proxyUrl: string | null = null;
-
-				if (settings.proxyUrl) {
-					// 如果手动配置了代理，优先使用
-					proxyUrl = settings.proxyUrl;
-					console.log('使用手动配置的代理:', proxyUrl);
-				} else if (settings.useSystemProxy) {
-					// 否则尝试从系统获取代理
-					proxyUrl = await this.getElectronProxy(urlString);
-					if (!proxyUrl) {
-						// 如果Electron代理获取失败，尝试环境变量
-						const envProxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.https_proxy;
-						proxyUrl = envProxy || null;
-					}
-					if (proxyUrl) {
-						console.log('使用系统/环境变量代理:', proxyUrl);
-					}
-				}
-
-				if (!proxyUrl) {
-					console.log('警告: 未检测到代理配置，请求可能会失败');
-				}
-
-				const options: any = {
-					method: 'GET',
-					headers: headers,
-					rejectUnauthorized: false, // 允许自签名证书
-					timeout: 60000, // 60秒超时
-				};
-
-				// 如果配置了代理，使用代理Agent
-				if (proxyUrl) {
-					try {
-						// 根据目标URL协议选择合适的agent
-						if (isHttps) {
-							const agent = new HttpsProxyAgent(proxyUrl);
-							options.agent = agent;
-						} else {
-							const agent = new HttpProxyAgent(proxyUrl);
-							options.agent = agent;
-						}
-						console.log('已创建代理Agent，目标URL:', urlString, '代理:', proxyUrl);
-					} catch (error) {
-						console.error('创建代理Agent失败:', error);
-					}
-				}
-
-				const req = httpModule.request(urlString, options, (res) => {
-					// 处理重定向
-					if (res.statusCode && (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308)) {
-						const location = res.headers.location;
-						if (location) {
-							// 处理相对路径重定向
-							const redirectUrl = location.startsWith('http') ? location : new URL(location, urlString).href;
-							return resolve(this.fetchWithNode(redirectUrl, headers, settings));
-						}
-					}
-
-					if (res.statusCode && res.statusCode >= 400) {
-						reject(new Error(`HTTP错误: ${res.statusCode} ${res.statusMessage || ''}`));
-						return;
-					}
-
-					let data = '';
-					res.setEncoding('utf8');
-					res.on('data', (chunk) => {
-						data += chunk;
-					});
-					res.on('end', () => {
-						resolve(data);
-					});
-				});
-
-				req.on('error', (error) => {
-					reject(error);
-				});
-
-				req.on('timeout', () => {
-					req.destroy();
-					reject(new Error('请求超时'));
-				});
-
-				req.end();
-			} catch (error) {
-				reject(error);
+		try {
+			const response = await requestUrl({
+				url: urlString,
+				method: 'GET',
+				headers: headers,
+			});
+			return response.text;
+		} catch (error) {
+			// Obsidian 的 requestUrl 会在 HTTP 错误时抛出异常
+			if (error instanceof Object && 'status' in error) {
+				const err = error as { status: number; message: string };
+				throw new Error(`HTTP error: ${err.status} ${err.message || ''}`);
 			}
-		});
+			throw error;
+		}
 	}
 
 	/**
@@ -328,9 +140,6 @@ export class WebCrawler {
 			// 添加Cookie
 			if (loginConfig?.cookies) {
 				headers['Cookie'] = loginConfig.cookies;
-				console.log(`✓ 已添加 Cookie，长度: ${loginConfig.cookies.length}`);
-			} else {
-				console.log(`⚠️ 未配置 Cookie`);
 			}
 
 			// 检查是否需要使用 Playwright（Twitter/X 等动态网页）
@@ -338,23 +147,11 @@ export class WebCrawler {
 			let html: string;
 
 			if (needsPlaywright) {
-				console.log('✓ 检测到动态网页，使用 Playwright（通过本地服务器）');
+				console.debug('Detected dynamic webpage, using Playwright (via local server)');
 				html = await this.fetchWithPlaywright(url, headers, settings);
 			} else {
-				// 优先使用Electron的net模块（支持系统代理），否则使用Node.js http/https
+				// 优先使用Electron的net模块（支持系统代理），否则使用 fetch API
 				html = await this.fetchWithElectronNet(url, headers, settings);
-			}
-
-			// 调试：保存原始HTML到插件目录
-			try {
-				const fs = require('fs');
-				const path = require('path');
-				const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-				const debugFile = path.join(process.cwd(), `debug-${timestamp}.html`);
-				fs.writeFileSync(debugFile, html, 'utf8');
-				console.log(`✓ 已保存原始HTML到: ${debugFile}`);
-			} catch (err) {
-				console.log(`⚠️ 无法保存调试HTML: ${err instanceof Error ? err.message : String(err)}`);
 			}
 
 			// 如果是 V2EX 帖子，尝试获取所有分页的回复
@@ -384,7 +181,7 @@ export class WebCrawler {
 				const replies = this.extractV2EXReplies(html);
 
 				if (replies.length > 0) {
-					console.log(`✓ 显示 ${replies.length} 条回复（其中 ${replies.filter(r => r.likes > 0).length} 条有点赞）`);
+					console.debug(`Showing ${replies.length} replies (${replies.filter(r => r.likes > 0).length} with likes)`);
 
 					// 将回复构建为 HTML，然后统一转换为 Markdown
 					let i = 0;
@@ -395,7 +192,7 @@ export class WebCrawler {
 
 					finalHtmlContent = content + `\n\n<h2>回复（${replies.length} 条）</h2>\n\n` + repliesHtml;
 				} else {
-					console.log(`⚠️ 没有回复`);
+					console.debug('No replies found');
 				}
 			}
 
@@ -428,36 +225,35 @@ export class WebCrawler {
 		// 从"XX 条回复"或"XX replies"中提取总回复数（支持中英文）
 		const replyCountMatch = firstPageHtml.match(/(\d+)\s*(条回复|replies|reply)/i);
 		if (!replyCountMatch || !replyCountMatch[1]) {
-			console.log('✓ V2EX 帖子无回复数信息，无需分页');
+			console.debug('V2EX post has no reply count info, no pagination needed');
 			return firstPageHtml;
 		}
 
 		const totalReplies = parseInt(replyCountMatch[1]);
-		console.log(`✓ V2EX 帖子共有 ${totalReplies} 条回复`);
+		console.debug(`V2EX post has ${totalReplies} replies total`);
 
 		// 每页100条回复，计算需要多少页
 		const repliesPerPage = 100;
 		const totalPages = Math.ceil(totalReplies / repliesPerPage);
 
 		if (totalPages < 2) {
-			console.log('✓ 回复未超过100条，无需分页');
+			console.debug('Replies not超过 100, no pagination needed');
 			return firstPageHtml;
 		}
 
-		console.log(`✓ 需要拉取 ${totalPages} 页内容`);
+		console.debug(`Need to fetch ${totalPages} pages`);
 
 		// 去掉 URL 中的 hash 部分（#replyxxx），并去掉已有的查询参数
 		const urlWithoutHash = url.split('#')[0] || url;
 		const baseUrl = urlWithoutHash.split('?')[0] || urlWithoutHash;
-		console.log(`基础URL: ${baseUrl}`);
 
-		// 获取所有分页的回复（只用 Node.js 方式，带代理）
+		// 获取所有分页的回复（只用 fetch API）
 		for (let page = 2; page <= totalPages; page++) {
 			try {
 				const pageUrl = `${baseUrl}?p=${page}`;
-				console.log(`正在获取第 ${page}/${totalPages} 页: ${pageUrl}`);
+				console.debug(`Fetching page ${page}/${totalPages}: ${pageUrl}`);
 
-				// 使用 Node.js 方式获取分页（带代理）
+				// 使用 fetch API 获取分页
 				const pageHtml = await this.fetchWithNode(pageUrl, headers, settings);
 
 				// 提取所有回复 div（从第一个回复开始到 Bottom 之前）
@@ -470,20 +266,20 @@ export class WebCrawler {
 					const allReplies = pageHtml.substring(repliesStart, bottomPos);
 					// 将回复插入到第一页的 <div id="Bottom"> 之前
 					firstPageHtml = firstPageHtml.replace(/(<div id="Bottom">)/, allReplies + '\n$1');
-					console.log(`✓ 已合并第 ${page} 页的回复`);
+					console.debug(`Merged page ${page} replies`);
 				} else {
-					console.log(`⚠️ 第 ${page} 页未找到回复内容`);
+					console.debug(`Page ${page} has no reply content`);
 				}
 
 				// 等待一下，避免请求过快
 				await new Promise(resolve => setTimeout(resolve, 500));
 			} catch (error) {
-				console.error(`获取第 ${page} 页失败:`, error);
+				console.error(`Failed to fetch page ${page}:`, error);
 				// 继续获取下一页
 			}
 		}
 
-		console.log(`✓ 已合并所有分页的回复`);
+		console.debug('Merged all paginated replies');
 		return firstPageHtml;
 	}
 
@@ -530,12 +326,12 @@ export class WebCrawler {
 				});
 
 				if (likes > 0) {
-					console.log(`提取回复: ${author} ❤️ ${likes}`);
+					console.debug(`Extracted reply: ${author} ❤️ ${likes}`);
 				}
 			}
 		}
 
-		console.log(`✓ 总共提取 ${replies.length} 条回复，其中 ${replies.filter(r => r.likes > 0).length} 条有点赞`);
+		console.debug(`Extracted ${replies.length} replies total, ${replies.filter(r => r.likes > 0).length} with likes`);
 		return replies;
 	}
 
@@ -562,11 +358,11 @@ export class WebCrawler {
 					if (encodedTitle) {
 						// URL decode
 						title = decodeURIComponent(encodedTitle).replace(/_/g, ' ');
-						console.log('✓ 从 Reddit URL 提取标题:', title);
+						console.debug('Extracted title from Reddit URL:', title);
 					}
 				}
 			} catch (e) {
-				console.log('⚠️ 从 URL 提取 Reddit 标题失败，尝试其他方法');
+				console.debug('Failed to extract Reddit title from URL, trying other methods');
 			}
 		}
 
@@ -600,9 +396,9 @@ export class WebCrawler {
 			if (!hasLoginHint) {
 				content = v2exMatch[1];
 				isV2EX = true;
-				console.log('✓ 使用 V2EX cell > topic_content 结构提取');
+				console.debug('Using V2EX cell > topic_content structure');
 			} else {
-				console.log('⚠️ 跳过包含登录提示的 topic_content');
+				console.debug('Skipping topic_content with login hint');
 			}
 		}
 
@@ -615,9 +411,9 @@ export class WebCrawler {
 				if (!hasLoginHint) {
 					content = v2exMatch[1];
 					isV2EX = true;
-					console.log('✓ 使用 V2EX topic_content (普通结构) 提取');
+					console.debug('Using V2EX topic_content (normal structure)');
 				} else {
-					console.log('⚠️ 跳过包含登录提示的 topic_content');
+					console.debug('Skipping topic_content with login hint');
 				}
 			}
 		}
@@ -627,7 +423,7 @@ export class WebCrawler {
 			const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
 			if (articleMatch && articleMatch[1]) {
 				content = articleMatch[1];
-				console.log('✓ 使用 article 标签提取');
+				console.debug('Using article tag');
 			}
 		}
 
@@ -636,7 +432,7 @@ export class WebCrawler {
 			const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
 			if (mainMatch && mainMatch[1]) {
 				content = mainMatch[1];
-				console.log('✓ 使用 main 标签提取');
+				console.debug('Using main tag');
 			}
 		}
 
@@ -654,7 +450,7 @@ export class WebCrawler {
 				const match = html.match(pattern);
 				if (match && match[1] && match[1].length > 50) {
 					content = match[1];
-					console.log('✓ 使用通用内容模式提取');
+					console.debug('Using generic content pattern');
 					break;
 				}
 			}
@@ -665,12 +461,12 @@ export class WebCrawler {
 			const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
 			if (bodyMatch && bodyMatch[1]) {
 				content = bodyMatch[1];
-				console.log('⚠ 使用 body 标签提取，可能包含无关内容');
+				console.debug('Using body tag, may include unrelated content');
 			}
 		}
 
 		if (!content) {
-			console.log('⚠ 未能提取到内容，使用原始 HTML');
+			console.debug('Could not extract content, using original HTML');
 			content = html;
 		}
 
@@ -682,13 +478,13 @@ export class WebCrawler {
 		// 知乎图片特殊处理：将 data-actualsrc 转换为 src
 		if (url.includes('zhihu.com')) {
 			// 知乎使用懒加载，真实图片URL在 data-actualsrc 中
-			content = content.replace(/<img[^>]*data-actualsrc=["']([^"']+)["'][^>]*>/gi, (match, url) => {
+			content = content.replace(/<img[^>]*data-actualsrc=["']([^"']+)["'][^>]*>/gi, (_match, url: string) => {
 				return `<img src="${url}" />`;
 			});
-			console.log('✓ 已处理知乎懒加载图片');
+			console.debug('Processed zhihu lazy-loaded images');
 		}
 
-		console.log('提取的内容长度:', content.length);
+		console.debug(`Extracted content length: ${content.length}`);
 
 		return { title, content };
 	}
@@ -742,8 +538,6 @@ export class WebCrawler {
 	 * 通过本地服务器使用 Playwright
 	 */
 	private async fetchWithLocalServer(url: string, settings: WebCrawlerPluginSettings): Promise<string> {
-		const http = require('http');
-
 		// 查找匹配的登录配置（获取cookies）
 		let cookies: string | undefined;
 		for (const config of settings.loginConfigs) {
@@ -752,7 +546,7 @@ export class WebCrawler {
 				const regex = new RegExp(pattern);
 				if (regex.test(url) && config.cookies) {
 					cookies = config.cookies;
-					console.log(`✓ 找到匹配的Cookie配置: ${config.urlPattern}`);
+					console.debug(`Found matching cookie config: ${config.urlPattern}`);
 					break;
 				}
 			} catch (e) {
@@ -760,75 +554,48 @@ export class WebCrawler {
 			}
 		}
 
-		return new Promise((resolve, reject) => {
+		try {
 			const postData = JSON.stringify({
 				url: url,
 				proxy: settings.proxyUrl || undefined,
 				cookies: cookies
 			});
 
-			const options = {
-				hostname: 'localhost',
-				port: 3737,
-				path: '/crawl',
+			const response = await requestUrl({
+				url: 'http://localhost:3737/crawl',
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					'Content-Length': Buffer.byteLength(postData)
 				},
-				timeout: 90000 // 90秒超时
-			};
-
-			const req = http.request(options, (res: any) => {
-				let data = '';
-
-				res.on('data', (chunk: any) => {
-					data += chunk;
-				});
-
-				res.on('end', () => {
-					try {
-						const result = JSON.parse(data);
-						if (result.success) {
-							console.log(`✓ 本地服务器返回内容，长度: ${result.html.length}`);
-							resolve(result.html);
-						} else {
-							reject(new Error(result.error || '爬取失败'));
-						}
-					} catch (e) {
-						reject(new Error(`解析响应失败: ${e instanceof Error ? e.message : String(e)}`));
-					}
-				});
+				body: postData,
 			});
 
-			req.on('error', (error: Error) => {
-				reject(new Error(`本地服务器连接失败: ${error.message}\n请先运行: node server.js`));
-			});
-
-			req.on('timeout', () => {
-				req.destroy();
-				reject(new Error('请求超时'));
-			});
-
-			req.write(postData);
-			req.end();
-		});
+			const result = JSON.parse(response.text);
+			if (result.success) {
+				console.debug(`Local server returned content, length: ${result.html.length}`);
+				return result.html;
+			} else {
+				throw new Error(result.error || '爬取失败');
+			}
+		} catch (error) {
+			throw new Error(`Local server connection failed: ${error instanceof Error ? error.message : String(error)}\nPlease run: node server.js`);
+		}
 	}
 
 	/**
 	 * 使用Playwright获取动态网页内容（通过本地服务器）
 	 */
 	private async fetchWithPlaywright(url: string, headers: Record<string, string>, settings: WebCrawlerPluginSettings): Promise<string> {
-		console.log('使用 Playwright（通过本地服务器）爬取动态内容...');
+		console.debug('Using Playwright (via local server) to crawl dynamic content...');
 
 		try {
 			// 尝试通过本地服务器
 			return await this.fetchWithLocalServer(url, settings);
 		} catch (error) {
 			throw new Error(
-				`Playwright 服务器不可用\n` +
-				`请先运行: node server.js\n` +
-				`错误: ${error instanceof Error ? error.message : String(error)}`
+				`Playwright server unavailable\n` +
+				`Please run: node server.js\n` +
+				`Error: ${error instanceof Error ? error.message : String(error)}`
 			);
 		}
 	}
