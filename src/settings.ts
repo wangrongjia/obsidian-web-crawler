@@ -37,12 +37,12 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Web crawler settings')
+			.setName('Web crawler')
 			.setHeading();
 
 		// 代理设置
 		new Setting(containerEl)
-			.setName('Proxy settings')
+			.setName('Proxy')
 			.setHeading();
 
 		new Setting(containerEl)
@@ -127,7 +127,7 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 					void (async () => {
 						const testButton = button;
 						testButton.setDisabled(true);
-						testButton.setButtonText('测试中...');
+						testButton.setButtonText('Testing...');
 
 						try {
 							const success = await this.testProxy(this.plugin.settings);
@@ -140,7 +140,7 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 							new Notice(`❌ 测试失败: ${error instanceof Error ? error.message : String(error)}`);
 						} finally {
 							testButton.setDisabled(false);
-							testButton.setButtonText('测试代理');
+							testButton.setButtonText('Test proxy');
 						}
 					})();
 				}));
@@ -209,7 +209,7 @@ export class WebCrawlerSettingTab extends PluginSettingTab {
 		const header = configContainer.createDiv();
 		header.addClass('login-config-header');
 
-		header.createEl('h4', {text: `Configuration #${index + 1}`});
+		const titleText = header.createEl('strong', {text: `Configuration #${index + 1}`});
 
 		const deleteButton = header.createEl('button', {text: 'Delete'});
 		deleteButton.addClass('login-config-delete-button');
