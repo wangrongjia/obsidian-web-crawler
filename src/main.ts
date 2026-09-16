@@ -51,63 +51,60 @@ export default class WebCrawlerPlugin extends Plugin {
 	/**
 	 * 获取光标位置的标题层级路径
 	 * @param editor 编辑器对象
-	 * @returns 标题层级路径数组，例如 ['生活', '医疗']，如果不在任何标题下则返回空数组
+	 * @returns 标题层级路径数组，例如 ['润学', '英国']，如果不在任何标题下则返回空数组
 	 */
 	getHeadingPath(editor: Editor): string[] {
 		const cursor = editor.getCursor();
-		const headingPath: {level: number, title: string}[] = [];
+		const path: string[] = [];
 
-		// 从光标位置向上查找所有的标题
+		// 步骤1: 从光标位置向上查找最近的标题（这个标题"包含"了光标所在行）
+		let nearestHeadingLine = -1;
+		let nearestHeadingLevel = 0;
+		let nearestHeadingTitle = '';
+
 		for (let line = cursor.line; line >= 0; line--) {
 			const lineContent = editor.getLine(line).trim();
-
-			// 匹配 Markdown 标题：# 后面跟空格和标题文本
 			const headingMatch = lineContent.match(/^(#{1,6})\s+(.+)$/);
 
 			if (headingMatch) {
-				const level = headingMatch[1]?.length || 1; // 标题级别 1-6
+				const level = headingMatch[1]?.length || 1;
 				const title = headingMatch[2]?.trim() || '';
-
-				// 清理路径，移除可能的格式符号
 				const cleanTitle = title.replace(/\[.*?\]/g, '').trim();
 
-				// 添加到临时路径
-				headingPath.unshift({level, title: cleanTitle});
+				nearestHeadingLine = line;
+				nearestHeadingLevel = level;
+				nearestHeadingTitle = cleanTitle;
+				break; // 找到最近的标题就停止
 			}
 		}
 
-		// 从临时路径构建最终路径，只保留连续递增的层级
-		// 比如有 # A, # B, ## B1，应该返回 ["B", "B1"]，不包含 "A"
-		if (headingPath.length === 0) {
+		// 如果没找到任何标题，返回空数组
+		if (nearestHeadingLine === -1) {
 			return [];
 		}
 
-		// 从后向前扫描，找到第一个"断层"点
-		// 例如：[{level:1, "A"}, {level:1, "B"}, {level:2, "B1"}]
-		// 应该从索引1开始，即 ["B", "B1"]
-		let finalPath: string[] = [];
-		let prevLevel = 0; // 0表示没有上一级
+		// 步骤2: 从这个最近的标题继续向上，找它的所有父标题（级别更小的）
+		path.unshift(nearestHeadingTitle);
+		let currentLevel = nearestHeadingLevel;
 
-		// 从最后一个标题向前检查
-		for (let i = headingPath.length - 1; i >= 0; i--) {
-			const current = headingPath[i];
-			if (!current) continue;
+		for (let line = nearestHeadingLine - 1; line >= 0; line--) {
+			const lineContent = editor.getLine(line).trim();
+			const headingMatch = lineContent.match(/^(#{1,6})\s+(.+)$/);
 
-			if (prevLevel === 0) {
-				// 第一个标题（最接近光标的），直接加入
-				finalPath.unshift(current.title);
-				prevLevel = current.level;
-			} else if (current.level < prevLevel) {
-				// 当前标题级别更小（级别更高），加入路径
-				finalPath.unshift(current.title);
-				prevLevel = current.level;
-			} else {
-				// 遇到同级或更低级别的标题，停止
-				break;
+			if (headingMatch) {
+				const level = headingMatch[1]?.length || 1;
+				const title = headingMatch[2]?.trim() || '';
+				const cleanTitle = title.replace(/\[.*?\]/g, '').trim();
+
+				// 只收集级别更小的标题（父标题）
+				if (level < currentLevel) {
+					path.unshift(cleanTitle);
+					currentLevel = level;
+				}
 			}
 		}
 
-		return finalPath;
+		return path;
 	}
 
 	/**

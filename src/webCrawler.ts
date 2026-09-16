@@ -601,24 +601,258 @@ export class WebCrawler {
 	}
 
 	/**
-	 * 提取Twitter/X内容
+	 * 提取Twitter/X内容 - 手动解析版本
+	 * 支持文字和图片交叉排列
 	 */
 	private extractTwitterContent(html: string): { title: string; content: string } {
-		// 提取推文文本
-		const tweetTextMatch = html.match(/<div[^>]*data-testid=["']tweetText["'][^>]*>([\s\S]*?)<\/div>/i);
-		let tweetText = '';
+		// 尝试旧的 tweetText 元素（向后兼容）
+		let tweetTextMatch = html.match(/<div[^>]*data-testid=["']tweetText["'][^>]*>([\s\S]*?)<\/div>/i);
+
 		if (tweetTextMatch && tweetTextMatch[1]) {
-			// 移除HTML标签获取纯文本
-			tweetText = tweetTextMatch[1].replace(/<[^>]+>/g, '').trim();
+			// 旧结构：使用原来的逻辑
+			const tweetText = tweetTextMatch[1].replace(/<[^>]+>/g, '').trim();
+			return this.extractTwitterContentOld(html, tweetText);
 		}
 
-		// 尝试提取作者信息
-		const authorMatch = html.match(/<span[^>]*class=["'][^"']*username[^"']*["'][^>]*>[\s\S]*?<span[^>]*>(@[^<]+)<\/span>/i);
-		const author = authorMatch ? authorMatch[1] : '';
+		// 新的 X 页面结构：文字和图片交叉排列
+		// 找到第一个 tweet 元素
+		const tweetPos = html.indexOf('data-testid="tweet"');
+		if (tweetPos === -1) {
+			return this.extractTwitterContentOld(html, '');
+		}
 
-		// 尝试提取作者显示名称
-		const displayNameMatch = html.match(/<span[^>]*class=["'][^"']*css-901oao[^"']*["'][^>]*>([^<]+)<\/span>\s*<span[^>]*class=["'][^"']*username[^"']*["']/i);
-		const displayName = displayNameMatch && displayNameMatch[1] ? displayNameMatch[1].trim() : '';
+		const afterAttrPos = tweetPos + 'data-testid="tweet"'.length;
+		const tagEndPos = html.indexOf('>', afterAttrPos);
+		if (tagEndPos === -1) {
+			return this.extractTwitterContentOld(html, '');
+		}
+
+		const contentStart = tagEndPos + 1;
+		// 扩大范围确保捕获完整推文
+		const tweetSection = html.substring(contentStart, contentStart + 150000);
+
+		// 步骤1：找到所有图片的位置
+		const imagePositions: { url: string; pos: number }[] = [];
+		const imgPattern = /<img[^>]*src=["']([^"']*pbs\.twimg\.com\/media\/[^"']*)["'][^>]*>/gi;
+		let imgMatch: RegExpExecArray | null;
+		while ((imgMatch = imgPattern.exec(tweetSection)) !== null) {
+			if (imgMatch[1]) {
+				let imageUrl = imgMatch[1].replace(/&amp;/g, '&');
+				// 去重（提取基础URL）
+				const baseUrl = imageUrl.split('?')[0];
+				if (baseUrl && !imagePositions.some(img => img.url.split('?')[0] === baseUrl)) {
+					imagePositions.push({ url: imageUrl, pos: imgMatch.index });
+				}
+			}
+		}
+
+		// 步骤2：按图片位置分割，提取每段的文字
+		type Checkpoint = { type: 'start'; pos: number } | { type: 'image'; pos: number; url: string; index: number } | { type: 'end'; pos: number };
+
+		const checkpoints: Checkpoint[] = [
+			{ type: 'start' as const, pos: 0 },
+			...imagePositions.map((img, i) => ({ type: 'image' as const, pos: img.pos, url: img.url, index: i })),
+			{ type: 'end' as const, pos: tweetSection.length }
+		];
+
+		interface ContentSegment {
+			type: 'text' | 'image';
+			content: string;
+		}
+
+		const segments: ContentSegment[] = [];
+
+		for (let i = 0; i < checkpoints.length - 1; i++) {
+			const current = checkpoints[i];
+			const next = checkpoints[i + 1];
+			if (!current || !next) continue;
+
+			// 如果当前是图片，添加图片段
+			if (current.type === 'image') {
+				const largeUrl = current.url.replace(/name=\w+/, 'name=large');
+				segments.push({ type: 'image', content: `![图片](${largeUrl})` });
+			}
+
+			// 提取两点之间的文字
+			const segment = tweetSection.substring(current.pos, next.pos);
+
+			// 清理HTML，提取纯文字
+			const text = segment
+				.replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, '')
+				.replace(/<path[^>]*>/gi, '')
+				.replace(/<svg[^>]*>/gi, '')
+				.replace(/<\/svg>/gi, '')
+				.replace(/<use[^>]*>/gi, '')
+				.replace(/<g[^>]*>/gi, '')
+				.replace(/<\/g>/gi, '')
+				.replace(/d="[^"]*"/gi, '')
+				.replace(/<img[^>]*>/gi, '')
+				.replace(/<button[^>]*>[\s\S]*?<\/button>/gi, '')
+				.replace(/<time[^>]*>[\s\S]*?<\/time>/gi, '')
+				.replace(/<section[^>]*>/gi, '')
+				.replace(/<\/section>/gi, '')
+				.replace(/<h2[^>]*>/gi, '\n\n## ')
+				.replace(/<\/h2>/gi, '\n\n')
+				.replace(/<div[^>]*>/gi, '')
+				.replace(/<\/div>/gi, '')
+				.replace(/<span[^>]*>/gi, '')
+				.replace(/<\/span>/gi, '')
+				.replace(/<a[^>]*>/gi, '')
+				.replace(/<\/a>/gi, '')
+				.replace(/<br\s*\/?>/gi, '\n')
+				.replace(/http\S+/g, '')
+				.replace(/&nbsp;/g, ' ')
+				.replace(/&amp;/g, '&')
+				.replace(/&lt;/g, '<')
+				.replace(/&gt;/g, '>')
+				.replace(/&quot;/g, '"')
+				.replace(/\s+/g, ' ')
+				.trim();
+
+			// 只保留有意义的文字（包含中文或英文，且长度大于5）
+			if (text.length > 5 && (/[\u4e00-\u9fa5]/.test(text) || /[a-zA-Z]{3,}/.test(text))) {
+				segments.push({ type: 'text', content: text });
+			}
+		}
+
+		// 步骤3：清理文字段，移除元数据
+		// 找到实际内容的开始位置（跳过用户信息和统计数据）
+		let contentStartIndex = 0;
+		const statsPatterns = [
+			/\d{1,3}[,\d]*\s+\d{1,3}\s+[\d,]+\s+\d+[万千KMB]/i,
+			/\d{1,3}\s+\d{1,3}\s+[\d,]+/,
+		];
+
+		for (let i = 0; i < segments.length; i++) {
+			const seg = segments[i];
+			if (!seg || seg.type !== 'text') continue;
+
+			// 跳过用户信息段（包含@用户名）
+			if (seg.content.includes('@') && seg.content.length < 50) {
+				contentStartIndex = i + 1;
+				continue;
+			}
+
+			// 检查是否包含统计数据
+			let hasStats = false;
+			for (const pattern of statsPatterns) {
+				if (pattern.test(seg.content) && seg.content.length < 100) {
+					contentStartIndex = i + 1;
+					hasStats = true;
+					break;
+				}
+			}
+			if (!hasStats) {
+				break;
+			}
+		}
+
+		// 步骤4：处理引用推文的分割
+		const finalSegments: ContentSegment[] = [];
+		let inQuotedTweet = false;
+
+		for (let i = contentStartIndex; i < segments.length; i++) {
+			const seg = segments[i];
+			if (!seg) continue;
+
+			if (seg.type !== 'text') {
+				finalSegments.push(seg);
+				continue;
+			}
+
+			// 检查是否遇到引用推文作者信息
+			const quoteAuthorPattern = /[\u4e00-\u9fa5\w\s]+@[a-zA-Z0-9_]+\s*·\s*/;
+			const quoteMatch = seg.content.match(quoteAuthorPattern);
+
+			if (quoteMatch && quoteMatch.index !== undefined && quoteMatch.index > 10) {
+				// 在此处分割
+				const beforeQuote = seg.content.substring(0, quoteMatch.index).trim();
+				const afterQuote = seg.content.substring(quoteMatch.index + quoteMatch[0].length).trim();
+
+				if (beforeQuote) {
+					finalSegments.push({ type: 'text', content: beforeQuote });
+				}
+
+				// 添加分隔符
+				finalSegments.push({ type: 'text', content: '\n\n--- 引用推文 ---\n' });
+
+				// 清理引用内容开头可能的日期
+				const datePattern = /^\d{1,2}月\d{1,2}日\s*/;
+				const cleanedAfterQuote = afterQuote.replace(datePattern, '').trim();
+
+				if (cleanedAfterQuote) {
+					finalSegments.push({ type: 'text', content: cleanedAfterQuote });
+				}
+
+				inQuotedTweet = true;
+			} else {
+				finalSegments.push(seg);
+			}
+		}
+
+		// 步骤5：构建最终内容
+		let tweetText = finalSegments
+			.map(seg => {
+				if (seg.type === 'image') {
+					return '\n\n' + seg.content + '\n\n';
+				}
+				return seg.content;
+			})
+			.join('')
+			.trim();
+
+		// 移除末尾的无用信息和残留的元数据
+		const uselessPatterns = [
+			/<br data-text="true">/g,
+			/<article>/g,
+			/<\/article>/g,
+			/想发布自己的文章.*$/m,
+			/升级为Premium.*$/m,
+			/的新用户\?.*$/m,
+			/立即注册.*$/m,
+			/·\s*\d+\.?\d*[万千KMB]?\s*查看.*$/m,  // 匹配 "·29.5万 查看"
+			/\s+查看$/m,
+			/\d{1,2}:\d{2}\s*[AP]M.*$/m,
+		];
+		for (const pattern of uselessPatterns) {
+			tweetText = tweetText.replace(pattern, '');
+		}
+
+		// 清理多余的空白
+		tweetText = tweetText.replace(/\n{3,}/g, '\n\n').trim();
+
+		return this.extractTwitterContentOld(html, tweetText);
+	}
+
+	/**
+	 * 提取Twitter/X内容 - 旧版逻辑（用于构建最终输出）
+	 */
+	private extractTwitterContentOld(html: string, tweetText: string): { title: string; content: string } {
+
+		// 尝试提取作者信息 - 支持新的X页面结构
+		let author = '';
+		let displayName = '';
+
+		// 新方法：查找 data-testid="User-Name" 内的链接
+		const userNameMatch = html.match(/data-testid="User-Name"[^>]*>[\s\S]*?<a[^>]*href="\/[^\/]+">[\s\S]*?@([a-zA-Z0-9_]+)/i);
+		if (userNameMatch && userNameMatch[1]) {
+			author = '@' + userNameMatch[1];
+		} else {
+			// 旧方法：查找 username class
+			const oldAuthorMatch = html.match(/<span[^>]*class=["'][^"']*username[^"']*["'][^>]*>[\s\S]*?<span[^>]*>(@[^<]+)<\/span>/i);
+			author = oldAuthorMatch && oldAuthorMatch[1] ? oldAuthorMatch[1] : '';
+		}
+
+		// 新方法：查找 User-Name 内的显示名称
+		const nameMatch = html.match(/data-testid="User-Name"[^>]*>[\s\S]*?<a[^>]*href="\/[^\/]+"[^>]*>([\s\S]*?)<\/a>[\s\S]*?@/i);
+		if (nameMatch && nameMatch[1]) {
+			// 提取显示名称（去除标签）
+			displayName = nameMatch[1].replace(/<[^>]+>/g, '').trim();
+		} else {
+			// 旧方法
+			const oldDisplayNameMatch = html.match(/<span[^>]*class=["'][^"']*css-901oao[^"']*["'][^>]*>([^<]+)<\/span>\s*<span[^>]*class=["'][^"']*username[^"']*["']/i);
+			displayName = oldDisplayNameMatch && oldDisplayNameMatch[1] ? oldDisplayNameMatch[1].trim() : '';
+		}
 
 		// 尝试提取时间
 		const timeMatch = html.match(/<time[^>]*datetime=["']([^"']+)["']/i);
@@ -649,33 +883,39 @@ export class WebCrawler {
 			content += `<div>${tweetText}</div>`;
 		}
 
-		// 提取图片（Twitter 的推文图片在 media/ 路径下）
-		// 注意：HTML 中的 & 会被编码为 &amp;
-		const imageMatches = html.matchAll(/<img[^>]*src=["']([^"']*pbs\.twimg\.com\/media\/[^"']*)["'][^>]*>/gi);
-		const images: string[] = [];
-		const seenUrls = new Set<string>(); // 去重
+		// 如果 tweetText 中已经包含图片（markdown 格式），则不再单独提取图片
+		// 只有在 tweetText 不包含图片时才提取
+		const hasImagesInText = tweetText.includes('![') && tweetText.includes('pbs.twimg.com');
 
-		for (const match of imageMatches) {
-			if (match[1]) {
-				// 转换 HTML 实体（&amp; -> &）
-				let imageUrl = match[1].replace(/&amp;/g, '&');
+		if (!hasImagesInText) {
+			// 提取图片（Twitter 的推文图片在 media/ 路径下）
+			// 注意：HTML 中的 & 会被编码为 &amp;
+			const imageMatches = html.matchAll(/<img[^>]*src=["']([^"']*pbs\.twimg\.com\/media\/[^"']*)["'][^>]*>/gi);
+			const images: string[] = [];
+			const seenUrls = new Set<string>(); // 去重
 
-				// 去重（同一张图片可能有多个尺寸）
-				// 提取基础 URL（移除尺寸参数）
-				const baseUrl = imageUrl.split('?')[0];
+			for (const match of imageMatches) {
+				if (match[1]) {
+					// 转换 HTML 实体（&amp; -> &）
+					let imageUrl = match[1].replace(/&amp;/g, '&');
 
-				if (baseUrl && !seenUrls.has(baseUrl)) {
-					seenUrls.add(baseUrl);
+					// 去重（同一张图片可能有多个尺寸）
+					// 提取基础 URL（移除尺寸参数）
+					const baseUrl = imageUrl.split('?')[0];
 
-					// 尝试获取原图（使用 large 或 4096x4096）
-					const largeUrl = imageUrl.replace(/name=\w+/, 'name=4096x4096');
-					images.push(`![图片](${largeUrl})`);
+					if (baseUrl && !seenUrls.has(baseUrl)) {
+						seenUrls.add(baseUrl);
+
+						// 尝试获取原图（使用 large 或 4096x4096）
+						const largeUrl = imageUrl.replace(/name=\w+/, 'name=4096x4096');
+						images.push(`![图片](${largeUrl})`);
+					}
 				}
 			}
-		}
 
-		if (images.length > 0) {
-			content += '\n\n## 图片\n\n' + images.join('\n\n');
+			if (images.length > 0) {
+				content += '\n\n## 图片\n\n' + images.join('\n\n');
+			}
 		}
 
 		// 如果有推文文本，尝试从中提取标题（用于文件名）

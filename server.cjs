@@ -129,7 +129,7 @@ async function crawlWithPlaywright(url, proxyUrl, cookies) {
 					path: '/',
 					httpOnly: true,
 					secure: url.startsWith('https'),
-					sameSite: 'Lax' as const
+					sameSite: 'Lax'
 				};
 			}).filter(cookie => cookie.name); // 过滤掉空的 cookie
 
@@ -168,12 +168,37 @@ async function crawlWithPlaywright(url, proxyUrl, cookies) {
 
 		// Twitter/X 特殊处理
 		if (url.includes('x.com') || url.includes('twitter.com')) {
+			console.log('检测到 Twitter/X URL，等待内容加载...');
+
+			// X 的内容是 JavaScript 动态渲染的，需要等待实际内容出现
+			// 先等待 tweet 元素存在
+			const tweetSelector = '[data-testid="tweet"]';
+
 			try {
-				await page.waitForSelector('[data-testid="tweetText"]', { timeout: 15000 });
-				console.log('✓ 找到推文内容');
+				console.log('等待 tweet 元素...');
+				await page.waitForSelector(tweetSelector, { timeout: 30000 });
+				console.log('✓ 找到 tweet 元素');
+
+				// 关键：等待 tweet 元素内有实际的文本内容
+				// X 会先渲染空的 tweet 元素，然后用 JavaScript 填充内容
+				console.log('等待推文内容渲染...');
+				await page.waitForFunction((selector) => {
+					const tweet = document.querySelector(selector);
+					if (!tweet) return false;
+					// 检查是否有实质性的文本内容（排除空白和很短的文本）
+					const text = tweet.textContent || '';
+					return text.trim().length > 20; // 推文通常超过20个字符
+				}, tweetSelector, { timeout: 20000 });
+
+				console.log('✓ 推文内容已渲染');
+
 			} catch (e) {
-				await page.waitForTimeout(3000);
+				console.log('⚠️ 等待内容超时，使用额外等待时间...');
+				await page.waitForTimeout(10000);
 			}
+
+			// 额外等待，确保所有内容完全加载
+			await page.waitForTimeout(2000);
 		} else if (url.includes('zhihu.com')) {
 			// 知乎特殊处理
 			try {
